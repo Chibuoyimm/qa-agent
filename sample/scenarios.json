@@ -1,0 +1,85 @@
+[
+  {
+    "name": "Net revenue excludes refunds and cancellations",
+    "description": "Sign in and check the independent financial result from fixed seeded orders.",
+    "expected_outcome": "Paid 150000 minus refunded 10000 equals net revenue 140000; cancelled 90000 contributes nothing.",
+    "approved": true,
+    "steps": [
+      { "action": "navigate", "path": "/login" },
+      { "action": "fill", "test_id": "login-email", "secret_env": "QA_TEST_EMAIL" },
+      { "action": "fill", "test_id": "login-password", "secret_env": "QA_TEST_PASSWORD" },
+      { "action": "click", "test_id": "login-submit" },
+      { "action": "assert_text", "test_id": "dashboard-revenue", "value": "140000" }
+    ]
+  },
+  {
+    "name": "Dashboard counts all seeded orders",
+    "description": "Check that the dashboard displays the complete fixed order set.",
+    "expected_outcome": "The dashboard displays exactly 3 orders after login.",
+    "approved": true,
+    "steps": [
+      { "action": "navigate", "path": "/login" },
+      { "action": "fill", "test_id": "login-email", "secret_env": "QA_TEST_EMAIL" },
+      { "action": "fill", "test_id": "login-password", "secret_env": "QA_TEST_PASSWORD" },
+      { "action": "click", "test_id": "login-submit" },
+      { "action": "assert_text", "test_id": "dashboard-orders", "value": "3 orders" }
+    ]
+  },
+  {
+    "name": "Refunded order remains visible and classified",
+    "description": "Verify the refund record and its amount separately from the aggregate total.",
+    "expected_outcome": "The refunded order has status refunded and amount 10000.",
+    "approved": true,
+    "steps": [
+      { "action": "navigate", "path": "/login" },
+      { "action": "fill", "test_id": "login-email", "secret_env": "QA_TEST_EMAIL" },
+      { "action": "fill", "test_id": "login-password", "secret_env": "QA_TEST_PASSWORD" },
+      { "action": "click", "test_id": "login-submit" },
+      { "action": "assert_text", "test_id": "order-ord-refund-state", "value": "refunded" },
+      { "action": "assert_text", "test_id": "order-ord-refund-amount", "value": "10000" }
+    ]
+  },
+  {
+    "name": "Cancelled order remains visible and classified",
+    "description": "Check the cancelled record that should be excluded from revenue.",
+    "expected_outcome": "The cancelled order has status cancelled and amount 90000.",
+    "approved": true,
+    "steps": [
+      { "action": "navigate", "path": "/login" },
+      { "action": "fill", "test_id": "login-email", "secret_env": "QA_TEST_EMAIL" },
+      { "action": "fill", "test_id": "login-password", "secret_env": "QA_TEST_PASSWORD" },
+      { "action": "click", "test_id": "login-submit" },
+      { "action": "assert_text", "test_id": "order-ord-cancelled-state", "value": "cancelled" },
+      { "action": "assert_text", "test_id": "order-ord-cancelled-amount", "value": "90000" }
+    ]
+  },
+  {
+    "name": "Invalid login is rejected",
+    "description": "Submit an incorrect synthetic password and verify access is denied.",
+    "expected_outcome": "An invalid password displays an error instead of the dashboard.",
+    "approved": true,
+    "steps": [
+      { "action": "navigate", "path": "/login" },
+      { "action": "fill", "test_id": "login-email", "secret_env": "QA_TEST_EMAIL" },
+      { "action": "fill", "test_id": "login-password", "value": "incorrect-synthetic-password" },
+      { "action": "click", "test_id": "login-submit" },
+      { "action": "assert_text", "test_id": "login-error", "value": "Invalid test credentials" }
+    ]
+  },
+  {
+    "name": "Signout removes dashboard access",
+    "description": "Sign in, sign out, and try to reach the protected dashboard again.",
+    "expected_outcome": "After signout, a dashboard request returns to the login screen.",
+    "approved": true,
+    "steps": [
+      { "action": "navigate", "path": "/login" },
+      { "action": "fill", "test_id": "login-email", "secret_env": "QA_TEST_EMAIL" },
+      { "action": "fill", "test_id": "login-password", "secret_env": "QA_TEST_PASSWORD" },
+      { "action": "click", "test_id": "login-submit" },
+      { "action": "assert_visible", "test_id": "dashboard-revenue" },
+      { "action": "click", "test_id": "signout" },
+      { "action": "navigate", "path": "/dashboard" },
+      { "action": "assert_visible", "test_id": "login-submit" }
+    ]
+  }
+]
