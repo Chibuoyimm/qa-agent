@@ -320,8 +320,68 @@ func TestHTTPBoundary(t *testing.T) {
 		t.Fatalf("snapshot proposal context or metadata: %+v %q", proposal, sentContext)
 	}
 	baseURL = server.URL
+	resp, body = request("POST", "/api/projects/"+project.ID+"/discoveries", "api-token", `{"start_path":"/dashboard","max_pages":2}`)
+	if resp.StatusCode != 202 {
+		t.Fatalf("create discovery: %d %s", resp.StatusCode, body)
+	}
+	var discovery qa.Discovery
+	if err := json.Unmarshal(body, &discovery); err != nil {
+		t.Fatal(err)
+	}
+	resp, body = request("GET", "/api/projects/"+project.ID+"/discoveries", "api-token", "")
+	if resp.StatusCode != 200 || !bytes.Contains(body, []byte(discovery.ID)) {
+		t.Fatalf("list discovery: %d %s", resp.StatusCode, body)
+	}
+	resp, body = request("POST", "/api/worker/discoveries/claim", "worker-token", `{"worker_id":"worker"}`)
+	if resp.StatusCode != 200 {
+		t.Fatalf("claim discovery: %d %s", resp.StatusCode, body)
+	}
+	var discoveryClaim struct {
+		Discovery  qa.Discovery `json:"discovery"`
+		LeaseToken string       `json:"lease_token"`
+	}
+	if err := json.Unmarshal(body, &discoveryClaim); err != nil {
+		t.Fatal(err)
+	}
+	if discoveryClaim.Discovery.ID != discovery.ID || discoveryClaim.LeaseToken == "" {
+		t.Fatalf("discovery claim: %+v", discoveryClaim)
+	}
+	result := qa.DiscoveryResult{Pages: []qa.DiscoveryPage{{Path: "/dashboard", Title: "Revenue is 140000", Headings: []string{}, Elements: []qa.DiscoveryElement{}, Links: []qa.DiscoveryLink{}}}, Warnings: []string{}}
+	completion, err := json.Marshal(qa.CompleteDiscoveryInput{LeaseToken: discoveryClaim.LeaseToken, Result: &result})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, body = request("POST", "/api/worker/discoveries/"+discovery.ID+"/complete", "worker-token", string(completion))
+	if resp.StatusCode != 200 || !bytes.Contains(body, []byte(`"status":"completed"`)) {
+		t.Fatalf("complete discovery: %d %s", resp.StatusCode, body)
+	}
+	discoveryProposal, err := json.Marshal(planner.Input{Prompt: "check revenue", Model: "test-model", CredentialMode: "byok", Consent: true, DiscoveryID: discovery.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, content = sendProposal(workingServer.URL, string(discoveryProposal))
+	if response.StatusCode != 200 {
+		t.Fatalf("discovery proposal: %d %s", response.StatusCode, content)
+	}
+	if err := json.Unmarshal(content, &proposal); err != nil {
+		t.Fatal(err)
+	}
+	hash = sha256.Sum256([]byte(sentContext))
+	if proposal.DiscoveryID != discovery.ID || proposal.ContextSHA256 != hex.EncodeToString(hash[:]) ||
+		!strings.Contains(sentContext, "untrusted observations, not business expectations") || !strings.Contains(sentContext, "Revenue is 140000") {
+		t.Fatalf("discovery context or traceability: %+v %q", proposal, sentContext)
+	}
+	discoveryProposal, err = json.Marshal(planner.Input{Prompt: "check revenue", Context: strings.Repeat("x", 59_950), Model: "test-model", CredentialMode: "byok", Consent: true, DiscoveryID: discovery.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, content = sendProposal(guardServer.URL, string(discoveryProposal))
+	if response.StatusCode != 400 {
+		t.Fatalf("oversized discovery context: %d %s", response.StatusCode, content)
+	}
+	baseURL = server.URL
 	t.Cleanup(func() {
-		for _, query := range []string{`DELETE FROM runs WHERE project_id=$1`, `DELETE FROM scenarios WHERE project_id=$1`, `DELETE FROM repository_snapshots WHERE project_id=$1`, `DELETE FROM projects WHERE id=$1`} {
+		for _, query := range []string{`DELETE FROM runs WHERE project_id=$1`, `DELETE FROM scenarios WHERE project_id=$1`, `DELETE FROM repository_snapshots WHERE project_id=$1`, `DELETE FROM discoveries WHERE project_id=$1`, `DELETE FROM projects WHERE id=$1`} {
 			if _, err := testDB.Exec(ctx, query, project.ID); err != nil {
 				t.Errorf("cleanup: %v", err)
 			}

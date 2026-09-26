@@ -37,6 +37,7 @@ type Input struct {
 	CredentialMode        string   `json:"credential_mode"`
 	Consent               bool     `json:"consent"`
 	RepositorySnapshotIDs []string `json:"repository_snapshot_ids,omitempty"`
+	DiscoveryID           string   `json:"discovery_id,omitempty"`
 }
 
 type Config struct {
@@ -54,6 +55,7 @@ type Result struct {
 	Questions           []string               `json:"questions"`
 	Assumptions         []string               `json:"assumptions"`
 	RepositorySnapshots []qa.RepositorySummary `json:"repository_snapshots"`
+	DiscoveryID         string                 `json:"discovery_id,omitempty"`
 }
 
 type Planner struct {
@@ -107,7 +109,7 @@ func (p *Planner) Config() Config {
 
 func (p *Planner) Validate(in Input, byokKey string) error {
 	if len(strings.TrimSpace(in.Prompt)) == 0 || len(in.Prompt) > 4000 ||
-		(len(strings.TrimSpace(in.Context)) == 0 && len(in.RepositorySnapshotIDs) == 0) || len(in.Context) > 60000 || !in.Consent {
+		(len(strings.TrimSpace(in.Context)) == 0 && len(in.RepositorySnapshotIDs) == 0 && in.DiscoveryID == "") || len(in.Context) > 60000 || !in.Consent {
 		return fmt.Errorf("%w: prompt, context, and explicit consent are required within size limits", ErrInvalid)
 	}
 	if len(in.RepositorySnapshotIDs) > 2 {
