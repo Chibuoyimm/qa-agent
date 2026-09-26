@@ -90,7 +90,7 @@ try {
     const response = await fetch(`${base}${path}`, {
       method: body === undefined ? 'GET' : 'POST', redirect: 'error',
       headers: { authorization: `Bearer ${options.worker ? workerToken : apiToken}`, 'content-type': 'application/json' },
-      body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(15000),
+      body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(options.timeout ?? 15000),
     });
     if (options.status) { assert.equal(response.status, options.status, path); return; }
     if (!response.ok) throw new Error(`${path}: HTTP ${response.status}: ${await response.text()}`);
@@ -106,6 +106,20 @@ try {
   };
   const healthy = await setup('Healthy correctness proof', goodURL);
   const faulty = await setup('Faulty correctness proof', badURL);
+  let repositorySnapshot;
+  if (process.env.QA_PROOF_GITHUB === '1') {
+    repositorySnapshot = await api(`/api/projects/${healthy.project.id}/repositories/sync`, {
+      repository: 'Chibuoyimm/qa-agent', ref: 'main', role: 'frontend', paths: ['sample/README.md', 'sample/scenarios.json'],
+    }, { timeout: 60000 });
+    assert.match(repositorySnapshot.commit_sha, /^[a-f0-9]{40}$/);
+    assert.equal(repositorySnapshot.files.length, 2);
+    assert.ok(repositorySnapshot.files[0].content.includes('Synthetic SaaS'));
+    const readBack = await api(`/api/projects/${healthy.project.id}/repositories/${repositorySnapshot.id}`);
+    assert.deepEqual(readBack, repositorySnapshot);
+    await api(`/api/projects/${faulty.project.id}/repositories/${repositorySnapshot.id}`, undefined, { status: 404 });
+    observations.push({ name: 'Live public GitHub import is commit-pinned, persisted, and project-scoped', status: 'passed', commit_sha: repositorySnapshot.commit_sha });
+  }
+
   const waitRun = async id => {
     for (let i = 0; i < 600; i++) {
       const run = await api(`/api/runs/${id}`);
@@ -127,6 +141,21 @@ try {
     return run;
   };
   const healthyRun = await runSuite(healthy, 'blocking', 'passed');
+  const discovery = await api(`/api/projects/${healthy.project.id}/discoveries`, {
+    start_path: '/dashboard', max_pages: 2, setup_scenario_id: healthy.scenarios[0].id,
+  });
+  let observed;
+  for (let i = 0; i < 500; i++) {
+    observed = await api(`/api/discoveries/${discovery.id}`);
+    if (!['queued', 'running'].includes(observed.status)) break;
+    await new Promise(r => setTimeout(r, 200));
+  }
+  assert.equal(observed.status, 'completed', JSON.stringify(observed));
+  assert.ok(observed.result.pages.some(p => p.elements.some(e => e.test_id === 'dashboard-revenue')));
+  assert.ok(!JSON.stringify(observed.result).includes(env.QA_TEST_PASSWORD));
+  assert.ok(!JSON.stringify(observed.result).includes(env.QA_TEST_EMAIL));
+  observations.push({ name: 'Approved setup and live browser discovery produce reviewable observations', status: 'passed' });
+
   await runSuite(faulty, 'blocking', 'failed');
   await runSuite(faulty, 'advisory', 'failed');
   const blocked = structuredClone(templates[0]);
@@ -152,6 +181,9 @@ try {
   const persisted = await api(`/api/runs/${healthyRun.id}`);
   assert.deepEqual(persisted, healthyRun);
   observations.push({ name: 'Results survive API restart', status: 'passed' });
+  assert.deepEqual(await api(`/api/discoveries/${discovery.id}`), observed);
+  if (repositorySnapshot) assert.deepEqual(await api(`/api/projects/${healthy.project.id}/repositories/${repositorySnapshot.id}`), repositorySnapshot);
+
   // The CLI must observe the same gate policy against the real API.
   worker = await start('worker-cli', process.execPath, ['--import', './worker/node_modules/tsx/dist/loader.mjs', 'worker/src/index.ts'], env);
   const cli = spawn(resolve(evidence, 'qa'), ['run', '--project', faulty.project.id, '--scenarios', faulty.scenarios[0].id, '--mode', 'blocking', '--timeout', '60s'], { cwd: root, env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -176,6 +208,13 @@ try {
     await page.getByLabel('API token', { exact: true }).fill(apiToken);
     await page.getByRole('button', { name: 'Open workspace' }).click();
     await page.getByRole('button', { name: healthy.project.name, exact: true }).click();
+
+    if (repositorySnapshot) {
+      await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('button', { name: 'Repository', exact: true }).click();
+      await page.getByRole('button', { name: 'Review files', exact: true }).click();
+      await page.getByText('sample/scenarios.json', { exact: true }).waitFor();
+      await page.screenshot({ path: resolve(evidence, 'repository-context.png'), fullPage: true });
+    }
     await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('button', { name: /^Scenarios/ }).click();
     await page.getByLabel('Select Missing identity blocks a run for next run', { exact: true }).uncheck();
     await page.getByLabel('Mode', { exact: true }).selectOption('blocking');
