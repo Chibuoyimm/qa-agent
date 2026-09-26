@@ -75,7 +75,8 @@ export async function api<T>(token: string, path: string, options: RequestInit =
         ...options.headers,
       },
     })
-  } catch {
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') throw error
     throw new ApiError('Could not reach the API. Check that the server is running on 127.0.0.1:8080.', 0)
   }
 
@@ -118,6 +119,22 @@ export const emptyScenario = (): ScenarioInput => ({
   name: '', description: '', expected_outcome: '', approved: false,
   steps: [{ action: 'navigate', path: '/' }, { action: 'assert_visible', test_id: '' }],
 })
+
+export type AiConfig = {
+  provider: 'openai'
+  models: string[]
+  managed_available: boolean
+  byok_available: boolean
+}
+
+export type AiProposalResponse = {
+  provider: 'openai'
+  model: string
+  context_sha256: string
+  scenarios: ScenarioInput[]
+  questions: string[]
+  assumptions: string[]
+}
 
 export function validateScenario(input: unknown): ScenarioInput {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Each scenario must be a JSON object.')

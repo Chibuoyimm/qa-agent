@@ -4,8 +4,9 @@ import {
   ChevronDown, ChevronRight, CircleDashed, Clock3, Code2, FileJson2,
   FolderOpen, HelpCircle, KeyRound, Layers3, LoaderCircle, LockKeyhole,
   Menu, MoreHorizontal, Play, Plus, RefreshCw, ShieldCheck, ShieldX,
-  Square, Terminal, Trash2, X,
+  Sparkles, Square, Terminal, Trash2, X,
 } from 'lucide-react'
+import AiProposals from './AiProposals'
 import {
   api, defaultStep, emptyScenario, formatDate, isActive, shortId,
   validateScenario,
@@ -72,10 +73,10 @@ function formatDuration(ms: number): string {
   return `${(ms / 1000).toFixed(1)} s`
 }
 
-function ScenarioEditor({ token, projectId, onClose, onSaved }: { token: string; projectId: string; onClose: () => void; onSaved: (scenario: Scenario) => void }) {
+function ScenarioEditor({ token, projectId, initial, source, onClose, onSaved }: { token: string; projectId: string; initial: ScenarioInput | null; source: 'new' | 'copy' | 'proposal'; onClose: () => void; onSaved: (scenario: Scenario) => void }) {
   const drawerRef = useRef<HTMLElement>(null)
   const [mode, setMode] = useState<EditorMode>('guided')
-  const [draft, setDraft] = useState<ScenarioInput>(emptyScenario)
+  const [draft, setDraft] = useState<ScenarioInput>(() => initial ? { ...initial, approved: false, steps: initial.steps.map(step => ({ ...step })) } : emptyScenario())
   const [json, setJson] = useState('')
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
@@ -159,7 +160,7 @@ function ScenarioEditor({ token, projectId, onClose, onSaved }: { token: string;
 
   return <div className="drawer-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}>
     <section className="drawer" ref={drawerRef} role="dialog" aria-modal="true" aria-labelledby="editor-title">
-      <div className="drawer-header"><div><div className="eyebrow">SCENARIO DESIGNER</div><h2 id="editor-title">Add a scenario</h2><p>Define the outcome, then add browser steps that prove it.</p></div><button className="icon-button" onClick={onClose} aria-label="Close editor"><X size={20} /></button></div>
+      <div className="drawer-header"><div><div className="eyebrow">SCENARIO DESIGNER</div><h2 id="editor-title">{source === 'copy' ? 'Review a copy' : source === 'proposal' ? 'Review AI proposal' : 'Add a scenario'}</h2><p>{source === 'copy' ? 'This creates a separate scenario. The existing check stays in coverage.' : source === 'proposal' ? 'Verify every proposed expectation and browser step before saving.' : 'Define the outcome, then add browser steps that prove it.'}</p></div><button className="icon-button" onClick={onClose} aria-label="Close editor"><X size={20} /></button></div>
       <div className="editor-tabs"><button className={mode === 'guided' ? 'active' : ''} onClick={() => setEditorMode('guided')}><Layers3 size={16} /> Guided editor</button><button className={mode === 'json' ? 'active' : ''} onClick={() => setEditorMode('json')}><Code2 size={16} /> JSON import</button></div>
       <div className="drawer-body">
         {mode === 'guided' ? <>
@@ -177,7 +178,7 @@ function ScenarioEditor({ token, projectId, onClose, onSaved }: { token: string;
           <button className="button button-soft add-step" disabled={draft.steps.length >= 50} onClick={() => updateDraft({ steps: [...draft.steps, defaultStep('assert_visible')] })}><Plus size={16} /> Add step</button>
           <div className="approval-box"><label className="inline-check strong"><input type="checkbox" checked={draft.approved} onChange={event => updateDraft({ approved: event.target.checked })} />Approve this scenario for runs</label><p>Unapproved scenarios stay in coverage but cannot be selected for a run.</p></div>
         </> : <>
-          <div className="json-intro"><FileJson2 size={20} /><div><strong>Import one scenario or an array</strong><p>Paste JSON using only the fields in the contract. Each valid scenario is created as a separate immutable revision.</p></div></div>
+          <div className="json-intro"><FileJson2 size={20} /><div><strong>Import one scenario or an array</strong><p>Paste JSON using only the fields in the contract. Each valid item is saved as a separate scenario.</p></div></div>
           <button className="sample-template" onClick={() => { setJson(JSON.stringify(sampleScenario, null, 2)); setReviewed(false); setError('') }}>Load controlled sample revenue example <ArrowRight size={14} /></button>
           <textarea className="json-editor" aria-label="Scenario JSON" spellCheck={false} value={json} onChange={event => { setJson(event.target.value); setError(''); setReviewed(false) }} />
           <div className="schema-guide"><strong>Allowed actions</strong><div className="schema-grid"><span><code>navigate</code> → <code>path</code></span><span><code>fill</code> → <code>test_id</code> + <code>value</code> or <code>secret_env</code></span><span><code>click</code> → <code>test_id</code></span><span><code>assert_text</code> → <code>test_id</code> + exact <code>value</code></span><span><code>assert_visible</code> → <code>test_id</code></span></div><p>Secrets use worker-local names beginning with <code>QA_TEST_</code>. JavaScript and arbitrary selectors are not accepted.</p></div>
@@ -185,7 +186,7 @@ function ScenarioEditor({ token, projectId, onClose, onSaved }: { token: string;
         <label className="review-check"><input type="checkbox" checked={reviewed} onChange={event => setReviewed(event.target.checked)} /><span>I reviewed the expected outcome and assertion steps for any scenario marked approved.</span></label>
         {error && <ErrorBanner message={error} />}
       </div>
-      <div className="drawer-footer"><button className="button button-ghost" onClick={onClose}>Cancel</button><button className="button button-primary" disabled={saving} onClick={save}>{saving ? <LoaderCircle size={16} className="spin" /> : <Plus size={16} />}{saving ? 'Saving…' : 'Create scenario'}</button></div>
+      <div className="drawer-footer"><button className="button button-ghost" onClick={onClose}>Cancel</button><button className="button button-primary" disabled={saving} onClick={save}>{saving ? <LoaderCircle size={16} className="spin" /> : <Plus size={16} />}{saving ? 'Saving…' : source === 'copy' ? 'Save reviewed copy' : 'Create scenario'}</button></div>
     </section>
   </div>
 }
@@ -219,6 +220,7 @@ function App() {
   const [projects, setProjects] = useState<Project[]>([])
   const [projectsLoading, setProjectsLoading] = useState(false)
   const [projectsError, setProjectsError] = useState('')
+  const [connectionState, setConnectionState] = useState<'connecting' | 'connected' | 'error'>('connecting')
   const [projectId, setProjectId] = useState('')
   const [showProjectForm, setShowProjectForm] = useState(false)
   const [page, setPage] = useState<Page>('overview')
@@ -231,6 +233,9 @@ function App() {
   const [selectedScenarioIds, setSelectedScenarioIds] = useState<string[]>([])
   const [mode, setMode] = useState<RunMode>('advisory')
   const [editorOpen, setEditorOpen] = useState(false)
+  const [editorDraft, setEditorDraft] = useState<ScenarioInput | null>(null)
+  const [editorSource, setEditorSource] = useState<'new' | 'copy' | 'proposal'>('new')
+  const [aiOpen, setAiOpen] = useState(false)
   const [creatingProject, setCreatingProject] = useState(false)
   const [projectName, setProjectName] = useState('')
   const [projectUrl, setProjectUrl] = useState('')
@@ -248,14 +253,15 @@ function App() {
   activeRun.current = selectedRunId
 
   const loadProjects = useCallback(async (authToken: string) => {
-    setProjectsLoading(true); setProjectsError('')
+    setProjectsLoading(true); setProjectsError(''); setConnectionState('connecting')
     try {
       const items = await api<Project[]>(authToken, '/api/projects')
       if (activeToken.current !== authToken) return
       setProjects(items)
+      setConnectionState('connected')
       setProjectId(current => items.some(item => item.id === current) ? current : items[0]?.id ?? '')
     } catch (err) {
-      if (activeToken.current === authToken) setProjectsError(err instanceof Error ? err.message : 'Could not load projects')
+      if (activeToken.current === authToken) { setProjectsError(err instanceof Error ? err.message : 'Could not load projects'); setConnectionState('error') }
     } finally { if (activeToken.current === authToken) setProjectsLoading(false) }
   }, [])
 
@@ -345,7 +351,11 @@ function App() {
     finally { setCancelling(false) }
   }
 
-  function openEditor() { setEditorOpen(true) }
+  function openEditor(initial: ScenarioInput | null = null, source: 'new' | 'copy' | 'proposal' = 'new') { setEditorDraft(initial); setEditorSource(source); setEditorOpen(true) }
+  const closeEditor = useCallback(() => setEditorOpen(false), [])
+  function reviewCopy(scenario: Scenario) {
+    openEditor({ name: scenario.name, description: scenario.description, expected_outcome: scenario.expected_outcome, approved: false, steps: scenario.steps.map(step => ({ ...step })) }, 'copy')
+  }
   function savedScenario(scenario: Scenario) {
     if (scenario.project_id !== activeProject.current) return
     setScenarios(previous => [...previous, scenario])
@@ -353,9 +363,9 @@ function App() {
     setNotice('Scenario created.')
   }
   function toggleScenario(id: string) { setSelectedScenarioIds(previous => previous.includes(id) ? previous.filter(item => item !== id) : [...previous, id]) }
-  function selectPage(next: Page) { setPage(next); setShowProjectForm(false); setMobileNav(false) }
+  function selectPage(next: Page) { setPage(next); if (next !== 'scenarios') setAiOpen(false); setShowProjectForm(false); setMobileNav(false) }
   function openProjectForm() { setPage('overview'); setShowProjectForm(true); setMobileNav(false) }
-  function disconnect() { ++loadSequence.current; selectionProject.current = ''; setToken(''); setTokenInput(''); setProjects([]); setProjectId(''); setScenarios([]); setRuns([]); setSelectedRun(null); setSelectedRunId('') }
+  function disconnect() { ++loadSequence.current; selectionProject.current = ''; setToken(''); setTokenInput(''); setProjects([]); setProjectId(''); setScenarios([]); setRuns([]); setSelectedRun(null); setSelectedRunId(''); setConnectionState('connecting') }
 
   if (!token) return <div className="auth-page"><div className="auth-grid" /><div className="auth-content"><div className="brand brand-auth"><span className="brand-mark"><Activity size={24} strokeWidth={2.5} /></span><span>qa<span className="brand-accent">agent</span><small>WORKSPACE</small></span></div><div className="auth-card"><div className="auth-symbol"><KeyRound size={24} /></div><div className="eyebrow">LOCAL PILOT · MILESTONE 01</div><h1>Proof you can repeat.</h1><p>Review approved checks, run them in a real browser, and see exactly where the evidence stands.</p><form onSubmit={event => { event.preventDefault(); if (tokenInput.trim()) setToken(tokenInput.trim()) }}><label className="field-label" htmlFor="api-token">API token</label><div className="token-input"><LockKeyhole size={18} /><input id="api-token" type="password" autoComplete="off" placeholder="Enter QA_API_TOKEN" value={tokenInput} onChange={event => setTokenInput(event.target.value)} /></div><button className="button button-primary auth-submit" disabled={!tokenInput.trim()}>Open workspace <ArrowRight size={17} /></button></form><div className="auth-foot"><ShieldCheck size={16} /><span>Your token stays in this browser tab’s memory and clears on reload.</span></div></div><p className="auth-caption">Designed for a trusted, controlled test environment.</p></div></div>
 
@@ -364,7 +374,7 @@ function App() {
       <div className="sidebar-section-label">WORKSPACE</div><div className="project-switcher"><div className="project-avatar">{project?.name?.charAt(0).toUpperCase() ?? 'P'}</div><div><strong>{project?.name ?? 'No project'}</strong><small>{project ? new URL(project.base_url).host : 'Create your first project'}</small></div><ChevronDown size={15} /></div>
       <div className="sidebar-section-label nav-label">NAVIGATION</div><nav aria-label="Main navigation"><button className={page === 'overview' ? 'nav-item active' : 'nav-item'} onClick={() => selectPage('overview')}><Layers3 size={18} />Overview</button><button className={page === 'scenarios' ? 'nav-item active' : 'nav-item'} onClick={() => selectPage('scenarios')}><ShieldCheck size={18} />Scenarios{scenarios.length > 0 && <span className="nav-count">{scenarios.length}</span>}</button><button className={page === 'runs' ? 'nav-item active' : 'nav-item'} onClick={() => selectPage('runs')}><Play size={18} />Runs{runs.length > 0 && <span className="nav-count">{runs.length}</span>}</button></nav>
       <div className="sidebar-projects"><div className="sidebar-section-label">PROJECTS <button className="icon-button small" aria-label="Create project" onClick={openProjectForm}><Plus size={15} /></button></div>{projects.map(item => <button key={item.id} className={`project-link ${item.id === projectId ? 'selected' : ''}`} onClick={() => { setProjectId(item.id); selectPage('overview') }}><span className="project-dot" />{item.name}</button>)}</div>
-      <div className="sidebar-bottom"><div className="connection"><span className="connection-dot" /><span>API connected</span></div><button className="sidebar-signout" onClick={disconnect}><KeyRound size={16} />Disconnect token</button></div>
+      <div className="sidebar-bottom"><div className="connection"><span className={`connection-dot connection-${connectionState}`} /><span>{connectionState === 'connecting' ? 'Connecting to API' : connectionState === 'connected' ? 'API connected' : 'API unavailable'}</span></div><button className="sidebar-signout" onClick={disconnect}><KeyRound size={16} />Disconnect token</button></div>
     </aside>
     <main className="main"><header className="topbar"><button className="icon-button mobile-menu" onClick={() => setMobileNav(true)} aria-label="Open navigation"><Menu size={21} /></button><div className="breadcrumb">Workspace <ChevronRight size={15} /> <strong>{page === 'overview' ? 'Overview' : page === 'scenarios' ? 'Scenarios' : 'Runs'}</strong></div><div className="topbar-right"><span className="environment"><span />LOCAL ENVIRONMENT</span><span className="topbar-avatar">OP</span></div></header>
       <div className="content">
@@ -378,13 +388,14 @@ function App() {
               {page === 'overview' && <><div className="page-heading"><div><div className="eyebrow">PROJECT OVERVIEW</div><h1>{project.name}</h1><p>One place to track configured coverage and the latest browser proof.</p></div><button className="button button-outline" onClick={() => void loadProjectData(token, projectId)}><RefreshCw size={16} />Refresh</button></div>
                 <div className="target-strip"><span className="target-icon"><Terminal size={18} /></span><div><small>TARGET ORIGIN</small><strong>{project.base_url}</strong></div><span className="target-type">CONTROLLED APP</span></div>
                 <div className="metric-grid"><div className="metric-card"><span>Configured scenarios</span><strong>{scenarios.length}</strong><small>{scenarios.length ? 'Defined checks in this project' : 'Start with your first check'}</small><Layers3 size={20} /></div><div className="metric-card"><span>Approved for runs</span><strong>{coverage.approved}</strong><small>Reviewed outcome and assertions</small><ShieldCheck size={20} /></div><div className="metric-card"><span>Awaiting approval</span><strong>{coverage.unapproved}</strong><small>Cannot be included in a run</small><Clock3 size={20} /></div><div className="metric-card"><span>Latest run</span><strong className="metric-status">{latestRun ? statusText[latestRun.status] : 'None yet'}</strong><small>{latestRun ? formatDate(latestRun.created_at) : 'No browser execution yet'}</small><Activity size={20} /></div></div>
-                <div className="overview-grid"><section className="panel quick-panel"><div className="panel-heading"><div><div className="panel-kicker">NEXT STEP</div><h2>{scenarios.length === 0 ? 'Define your first check' : approved.length === 0 ? 'Review your scenarios' : 'Run your approved checks'}</h2></div><ArrowDownRight size={21} /></div><p>{scenarios.length === 0 ? 'Write a business outcome and browser steps. Approval makes a scenario eligible for execution.' : approved.length === 0 ? 'Your configured scenarios are not approved, so they cannot be run yet. Create a reviewed revision with an assertion.' : `Choose from ${approved.length} approved ${approved.length === 1 ? 'scenario' : 'scenarios'}, then launch a real browser run.`}</p><button className="button button-primary" onClick={() => { if (scenarios.length === 0 || approved.length === 0) { setPage('scenarios'); openEditor() } else setPage('scenarios') }}>{approved.length > 0 ? 'Choose scenarios' : 'Add scenario'} <ArrowRight size={16} /></button></section><section className="panel latest-panel"><div className="panel-heading"><div><div className="panel-kicker">LATEST ACTIVITY</div><h2>Recent run</h2></div><MoreHorizontal size={20} /></div>{latestRun ? <><div className="latest-row"><StatusPill status={latestRun.status} /><span>{latestRun.scenarios.length} selected</span></div><p>{latestRun.mode === 'blocking' ? 'Blocking' : 'Advisory'} · {formatDate(latestRun.created_at)}</p><button className="link-button" onClick={() => { setSelectedRunId(latestRun.id); setPage('runs') }}>View report <ArrowRight size={15} /></button></> : <div className="quiet-empty">No runs yet. Your first report will appear here.</div>}</section></div>
+                <div className="overview-grid"><section className="panel quick-panel"><div className="panel-heading"><div><div className="panel-kicker">NEXT STEP</div><h2>{scenarios.length === 0 ? 'Define your first check' : approved.length === 0 ? 'Review your scenarios' : 'Run your approved checks'}</h2></div><ArrowDownRight size={21} /></div><p>{scenarios.length === 0 ? 'Write a business outcome and browser steps. Approval makes a scenario eligible for execution.' : approved.length === 0 ? 'Your configured scenarios are unapproved. Review a copy of a draft, then approve its outcome and assertions.' : `Choose from ${approved.length} approved ${approved.length === 1 ? 'scenario' : 'scenarios'}, then launch a real browser run.`}</p><button className="button button-primary" onClick={() => { if (scenarios.length === 0) { setPage('scenarios'); openEditor() } else setPage('scenarios') }}>{scenarios.length === 0 ? 'Add scenario' : 'View scenarios'} <ArrowRight size={16} /></button></section><section className="panel latest-panel"><div className="panel-heading"><div><div className="panel-kicker">LATEST ACTIVITY</div><h2>Recent run</h2></div><MoreHorizontal size={20} /></div>{latestRun ? <><div className="latest-row"><StatusPill status={latestRun.status} /><span>{latestRun.scenarios.length} selected</span></div><p>{latestRun.mode === 'blocking' ? 'Blocking' : 'Advisory'} · {formatDate(latestRun.created_at)}</p><button className="link-button" onClick={() => { setSelectedRunId(latestRun.id); setPage('runs') }}>View report <ArrowRight size={15} /></button></> : <div className="quiet-empty">No runs yet. Your first report will appear here.</div>}</section></div>
                 <div className="coverage-note"><HelpCircle size={18} /><span>Coverage counts configured scenarios in this project. It does not represent every possible app behaviour.</span></div>
                 <div className="new-project-inline"><span>Need another target?</span><button onClick={openProjectForm}>Create another project <ArrowRight size={14} /></button></div>
               </>}
-              {page === 'scenarios' && <><div className="page-heading"><div><div className="eyebrow">SCENARIO COVERAGE</div><h1>Scenarios</h1><p>Approved outcomes are frozen into each run. Unapproved scenarios stay visible but cannot execute.</p></div><button className="button button-primary" onClick={openEditor}><Plus size={17} />Add scenario</button></div>
+              {page === 'scenarios' && <><div className="page-heading"><div><div className="eyebrow">SCENARIO COVERAGE</div><h1>Scenarios</h1><p>Approved outcomes are frozen into each run. Unapproved scenarios stay visible but cannot execute.</p></div><div className="page-actions"><button className="button button-ai" onClick={() => setAiOpen(previous => !previous)}><Sparkles size={17} />Ask AI to propose</button><button className="button button-primary" onClick={() => openEditor()}><Plus size={17} />Add scenario</button></div></div>
+                {aiOpen && <AiProposals key={projectId} token={token} projectId={projectId} onClose={() => setAiOpen(false)} onReview={scenario => openEditor(scenario, 'proposal')} />}
                 <div className="coverage-summary"><div><span>All configured</span><strong>{scenarios.length}</strong></div><div><span className="mini-dot approved" />Approved<strong>{coverage.approved}</strong></div><div><span className="mini-dot unapproved" />Unapproved<strong>{coverage.unapproved}</strong></div><p>Coverage describes configured scenarios, not every possible app behaviour.</p></div>
-                {scenarios.length === 0 ? <EmptyState icon={<ShieldCheck size={28} />} title="No scenarios yet">Add an expected business outcome and browser steps to begin your coverage.</EmptyState> : <div className="scenario-grid"><div className="scenario-list-head"><h2>Configured checks</h2><span>{selectedScenarioIds.length} selected for next run</span></div>{scenarios.map(scenario => <article className={`scenario-card ${selectedScenarioIds.includes(scenario.id) ? 'selected' : ''}`} key={scenario.id}><div className="scenario-select"><input type="checkbox" aria-label={`Select ${scenario.name} for next run`} disabled={!scenario.approved} checked={selectedScenarioIds.includes(scenario.id)} onChange={() => toggleScenario(scenario.id)} /></div><div className="scenario-main"><div className="scenario-topline"><span className={`approval-label ${scenario.approved ? 'is-approved' : ''}`}>{scenario.approved ? <Check size={13} /> : <Clock3 size={13} />}{scenario.approved ? 'APPROVED' : 'UNAPPROVED'}</span><span>#{shortId(scenario.id)}</span></div><h3>{scenario.name}</h3>{scenario.description && <p className="scenario-description">{scenario.description}</p>}<div className="expected"><span>EXPECTED OUTCOME</span><p>{scenario.expected_outcome}</p></div><div className="scenario-footer"><span>{scenario.steps.length} {scenario.steps.length === 1 ? 'step' : 'steps'}</span><span>Created {formatDate(scenario.created_at)}</span></div></div></article>)}</div>}
+                {scenarios.length === 0 ? <EmptyState icon={<ShieldCheck size={28} />} title="No scenarios yet">Add an expected business outcome and browser steps to begin your coverage.</EmptyState> : <div className="scenario-grid"><div className="scenario-list-head"><h2>Configured checks</h2><span>{selectedScenarioIds.length} selected for next run</span></div>{scenarios.map(scenario => <article className={`scenario-card ${selectedScenarioIds.includes(scenario.id) ? 'selected' : ''}`} key={scenario.id}><div className="scenario-select"><input type="checkbox" aria-label={`Select ${scenario.name} for next run`} disabled={!scenario.approved} checked={selectedScenarioIds.includes(scenario.id)} onChange={() => toggleScenario(scenario.id)} /></div><div className="scenario-main"><div className="scenario-topline"><span className={`approval-label ${scenario.approved ? 'is-approved' : ''}`}>{scenario.approved ? <Check size={13} /> : <Clock3 size={13} />}{scenario.approved ? 'APPROVED' : 'UNAPPROVED'}</span><span>#{shortId(scenario.id)}</span></div><h3>{scenario.name}</h3>{scenario.description && <p className="scenario-description">{scenario.description}</p>}<div className="expected"><span>EXPECTED OUTCOME</span><p>{scenario.expected_outcome}</p></div><div className="scenario-footer"><span>{scenario.steps.length} {scenario.steps.length === 1 ? 'step' : 'steps'}</span><span>Created {formatDate(scenario.created_at)}</span><button className="scenario-review" onClick={() => reviewCopy(scenario)}>Review a copy <ArrowRight size={13} /></button></div></div></article>)}</div>}
                 {approved.length > 0 && <div className="launch-bar"><div><strong>{selectedScenarioIds.length} approved {selectedScenarioIds.length === 1 ? 'scenario' : 'scenarios'} selected</strong><small>Each runs in a fresh browser context.</small></div><div className="launch-controls"><label htmlFor="scenario-mode">Mode</label><select id="scenario-mode" value={mode} onChange={event => setMode(event.target.value as RunMode)}><option value="advisory">Advisory · warn</option><option value="blocking">Blocking · fail</option></select><button className="button button-primary" disabled={launching || selectedScenarioIds.length === 0} onClick={() => void launchRun()}>{launching ? <LoaderCircle className="spin" size={16} /> : <Play size={16} />}{launching ? 'Queuing…' : 'Run checks'}</button></div></div>}
               </>}
               {page === 'runs' && <><div className="page-heading"><div><div className="eyebrow">BROWSER EXECUTION</div><h1>Runs & results</h1><p>Track what passed, what did not match, and what could not complete.</p></div><button className="button button-outline" onClick={() => void loadProjectData(token, projectId)}><RefreshCw size={16} />Refresh</button></div>
@@ -395,7 +406,7 @@ function App() {
         </>}
       </div>
     </main>
-    {editorOpen && <ScenarioEditor token={token} projectId={projectId} onClose={() => setEditorOpen(false)} onSaved={savedScenario} />}
+    {editorOpen && <ScenarioEditor token={token} projectId={projectId} initial={editorDraft} source={editorSource} onClose={closeEditor} onSaved={savedScenario} />}
   </div>
 }
 
