@@ -21,7 +21,7 @@ All API endpoints except `GET /healthz` require `Authorization: Bearer <QA_API_T
 - `GET /api/projects/{id}/scenarios`: `Scenario[]`.
 - `POST /api/projects/{id}/scenarios`: scenario input without server fields -> 201 `Scenario`. Store immutable revisions: editing/approval workflows follow later. Only approved scenarios are eligible for runs; create explicitly with `approved: true` after human review in this pilot.
 - `POST /api/projects/{id}/runs`: `{scenario_ids: string[], mode: "advisory"|"blocking"}` -> 202 `Run`. Nonempty unique IDs, all approved and belonging to the project. Snapshot selected scenarios and target URL atomically. No test assertion can change inside a run.
-- `GET /api/projects/{id}/runs`: `Run[]`, newest first.
+- `GET /api/projects/{id}/runs`: `Run[]`, newest first, at most the latest 100 runs. Older runs remain available by ID; pagination is a later extension.
 - `GET /api/runs/{id}`: `Run`.
 - `POST /api/runs/{id}/cancel`: pending or running -> `Run` with cancelled state. Late worker results must be rejected.
 - `POST /api/worker/claim`: `{worker_id: string}` -> 200 `{run: Run, lease_token: string, lease_expires_at: string}` or 204. Claim oldest pending run atomically with a 60-second lease. An expired running lease becomes `error`, never a pass or implicit retry. This pilot does not automatically re-execute side effects after worker loss.
