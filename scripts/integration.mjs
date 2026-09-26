@@ -193,6 +193,16 @@ try {
   assert.equal(code, 1, cliOutput);
   await writeFile(resolve(evidence, 'cli.txt'), cliOutput);
   observations.push({ name: 'Pipeline CLI blocks faulty build', status: 'passed' });
+  const discoveryCLI = spawn(resolve(evidence, 'qa'), ['discover', '--project', healthy.project.id, '--start-path', '/dashboard', '--setup-scenario', healthy.scenarios[0].id, '--max-pages', '2', '--timeout', '60s', '--json'], { cwd: root, env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
+  children.push(discoveryCLI); manifest.processes.push({ name: 'discovery-cli', pid: discoveryCLI.pid });
+  let discoveryJSON = '', discoveryProgress = '';
+  discoveryCLI.stdout.on('data', d => { discoveryJSON += d; });
+  discoveryCLI.stderr.on('data', d => { discoveryProgress += d; });
+  const [discoveryCode] = await once(discoveryCLI, 'exit');
+  assert.equal(discoveryCode, 0, discoveryProgress);
+  assert.equal(JSON.parse(discoveryJSON).status, 'completed');
+  observations.push({ name: 'Discovery CLI executes an authenticated browser job and emits JSON', status: 'passed' });
+
   const webPort = await port();
   const webURL = `http://127.0.0.1:${webPort}`;
   const web = await start('web', process.execPath, ['web/node_modules/vite/bin/vite.js', '--host', '127.0.0.1', '--port', String(webPort), '--strictPort', 'web'], env);
@@ -215,6 +225,23 @@ try {
       await page.getByText('sample/scenarios.json', { exact: true }).waitFor();
       await page.screenshot({ path: resolve(evidence, 'repository-context.png'), fullPage: true });
     }
+
+    await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('button', { name: 'Discover', exact: true }).click();
+    await page.getByLabel('Start path', { exact: false }).fill('/dashboard');
+    await page.getByLabel('Approved setup scenario', { exact: false }).selectOption(healthy.scenarios[0].id);
+    await page.getByRole('button', { name: 'Start discovery', exact: true }).click();
+    await page.getByText('Discovery queued for /dashboard. Watch its status below.', { exact: true }).waitFor();
+    for (let i = 0; i < 100; i++) {
+      const jobs = await api(`/api/projects/${healthy.project.id}/discoveries`);
+      if (jobs.length >= 3 && jobs[0].status === 'completed') break;
+      if (i === 99) throw new Error('Web-created discovery did not complete');
+      await new Promise(r => setTimeout(r, 200));
+    }
+    await page.getByRole('region', { name: 'Discovery history' }).getByRole('button', { name: 'Refresh', exact: true }).click();
+    await page.getByRole('button', { name: 'Review observations', exact: true }).first().click();
+    await page.getByText('dashboard-revenue', { exact: true }).waitFor();
+    await page.screenshot({ path: resolve(evidence, 'browser-discovery.png'), fullPage: true });
+    observations.push({ name: 'Web launches and reviews real browser discovery', status: 'passed' });
     await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('button', { name: /^Scenarios/ }).click();
     await page.getByLabel('Select Missing identity blocks a run for next run', { exact: true }).uncheck();
     await page.getByLabel('Mode', { exact: true }).selectOption('blocking');
@@ -240,13 +267,16 @@ try {
     await page.route('**/proposals', async route => {
       assert.equal(route.request().headers()['x-qa-provider-key'], 'synthetic-provider-key');
       assert.equal(route.request().postDataJSON().consent, true);
+      assert.ok(route.request().postDataJSON().discovery_id);
       await route.fulfill({ json: { provider: 'openai', model: 'test-model', context_sha256: 'synthetic-context', scenarios: [proposal], questions: ['Are multi-currency orders supported?'], assumptions: ['All fixture orders use one currency.'] } });
     });
     await page.getByRole('button', { name: 'Ask AI to propose', exact: true }).click();
     await page.getByRole('textbox', { name: /^Testing request/ }).fill('Check the independent net revenue calculation.');
     await page.getByRole('textbox', { name: /^Application context/ }).fill('Paid 150000 minus refund 10000 equals 140000; cancelled 90000 is excluded.');
+    await page.getByRole('button', { name: 'Review observations', exact: true }).first().click();
+    await page.getByRole('button', { name: 'Use these reviewed observations', exact: true }).click();
     await page.getByLabel('OpenAI API key', { exact: true }).fill('synthetic-provider-key');
-    await page.getByRole('checkbox', { name: /I agree to send/ }).check();
+    await page.getByRole('checkbox', { name: /I (agree to send|have reviewed)/ }).check();
     await page.getByRole('button', { name: 'Generate proposals', exact: true }).click();
     await page.getByText('Are multi-currency orders supported?', { exact: true }).waitFor();
     assert.equal(await page.getByLabel('OpenAI API key', { exact: true }).inputValue(), '');

@@ -63,6 +63,8 @@ TEST_DATABASE_URL="$DATABASE_URL" go test -race ./...
 make integration
 ```
 
+`QA_PROOF_GITHUB=1 make integration` additionally verifies a live public GitHub import; normal CI uses local fixtures and fake provider transports for network boundaries.
+
 `make integration` builds the API and CLI, starts a disposable PostgreSQL container and healthy/faulty sample servers on temporary ports, and runs real Chromium checks. It verifies release decisions, missing secrets, approval rejection, cancellation, persistence across API restart, CLI exit codes, and the web-to-worker flow. It removes the processes/container it creates and retains synthetic evidence in ignored `artifacts/integration-*` directories. Database unit/integration tests use temporary schemas and remove them afterward.
 
 The GitHub Actions workflow runs the same checks on pushes and pull requests. No paid model calls or customer credentials are required. Browser evidence includes screenshots and videos; the UI currently displays worker-local paths rather than hosting those files.
@@ -82,14 +84,29 @@ The GitHub Actions workflow runs the same checks on pushes and pull requests. No
 | `sample` | Synthetic target, fixed business data and defect switch |
 | `scripts` | Sample setup and full integration proof |
 
+## Repository context and browser discovery
+
+The **Repository** page imports selected files from a public or private GitHub repository into an immutable snapshot. Choose a frontend/backend role, a branch/tag/ref, and exact file paths. Private repository tokens are used for that request only. Each snapshot records the resolved commit SHA and a content hash; the complete content is reviewable before model sharing. Re-sync creates a new snapshot. The deployed app may differ from that source revision, so it remains evidence rather than an expected-outcome oracle. See [repository limits](docs/repository-context.md).
+
+The **Discover** page schedules a bounded browser visit independently of model access. Choose a starting path, a one-to-five-page limit, and optionally an approved setup scenario for login. The worker runs that exact setup, then follows eligible same-origin links while blocking write requests. It collects visible controls, headings and text; it does not collect form values, cookies or browser storage. Observations persist and can be reviewed and included in a proposal. A completed discovery is not a passed test. [Discovery boundaries and API](docs/discovery.md) explain limitations, cancellation and leases.
+
+Pipelines can schedule discovery as well:
+
+```sh
+bin/qa discover --project PROJECT_ID --start-path /dashboard \
+  --setup-scenario APPROVED_LOGIN_SCENARIO_ID --max-pages 3 --json
+```
+
+`--json` writes the terminal discovery object to stdout and progress to stderr. Exit 0 means observation completed, 1 means error/cancellation, and 2 means client or transport failure. This command does not change approved checks or decide a release gate.
+
 ## AI proposals
 
 Configure `QA_OPENAI_MODELS` with the exact Responses-compatible model IDs you intend to use and restart the API. For managed credentials, also configure `QA_OPENAI_API_KEY` on the server. With models configured, BYOK is available using a key supplied transiently in the web form. Both paths use the same provider implementation; this pilot does not implement credit purchases or customer billing.
 
-In the scenario workspace, choose **Ask AI to propose**, describe the testing request, and paste relevant application context. [Sample app context](docs/sample-app-context.md) provides a synthetic example. The form asks for explicit consent to send that material to OpenAI. It does not automatically upload repositories or credentials. Draft scenarios, questions and assumptions appear for review, and no generated scenario is approved or executed automatically. Keys stay out of persistence and logs; use HTTPS if accessing the API beyond localhost.
+In the scenario workspace, choose **Ask AI to propose**, describe the testing request, and paste relevant application context. [Sample app context](docs/sample-app-context.md) provides a synthetic example. The form asks for explicit consent to send that material to OpenAI. Only explicitly selected repository snapshots and discovery observations are included; credentials are not model context. Draft scenarios, questions and assumptions appear for review, and no generated scenario is approved or executed automatically. Keys stay out of persistence and logs; use HTTPS if accessing the API beyond localhost.
 
 Proposal calls have a 90-second deadline, a 6000-output-token cap, and a two-call concurrency limit. Provider errors, refusals and incomplete/invalid output are failures, not fabricated drafts. No automatic model retry occurs. See [the proposal contract](docs/ai-proposals.md) for details. Automated provider tests use a fake HTTP transport; the integration UI check simulates generation and saves through the real database. Live model quality and account/model access require a separately configured provider key and are not established by those tests.
 
-Repository synchronisation, autonomous exploration, hosted browser isolation, encrypted customer secret storage, tenant accounts, role-rich fixtures, billing, and subscription login remain separate work. The browser pilot supports one main page and `data-testid` selectors; iframe requests, popups and WebSockets return explicit errors. Configured-scenario counts are not claims of complete application coverage.
+Automatic repository webhooks, broader interactive exploration, hosted browser isolation, encrypted customer secret storage, tenant accounts, role-rich fixtures, billing, and subscription login remain separate work. The browser pilot supports one main page and `data-testid` selectors; iframe requests, popups and WebSockets return explicit errors. Configured-scenario counts are not claims of complete application coverage.
 
 Stop local development processes with Ctrl+C and run `docker compose down` when finished. The Compose database volume is retained for your next session.
