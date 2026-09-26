@@ -22,7 +22,7 @@ export function SnapshotBrowser({ token, projectId, selected = [], onSelectionCh
 
   useEffect(() => {
     const abort = new AbortController()
-    setSnapshots([]); setDetails({}); setOpenIds([]); setError(''); setLoadingList(true)
+    setSnapshots([]); setDetails({}); setOpenIds([]); setLoadingDetail([]); setError(''); setLoadingList(true)
     void api<RepositorySnapshotSummary[]>(token, `/api/projects/${encodeURIComponent(projectId)}/repositories`, { signal: abort.signal })
       .then(items => { if (!abort.signal.aborted) setSnapshots(items) })
       .catch(err => { if (!abort.signal.aborted) setError(`Could not load repository snapshots: ${message(err)}`) })
@@ -31,8 +31,9 @@ export function SnapshotBrowser({ token, projectId, selected = [], onSelectionCh
   }, [token, projectId, refreshKey, reload])
 
   const open = useCallback(async (id: string) => {
-    if (openIds.includes(id)) { if (!selected.includes(id)) setOpenIds(current => current.filter(item => item !== id)); return }
-    setError(''); setOpenIds(current => [...current, id])
+    if (openIds.includes(id) && details[id]) { if (!selected.includes(id)) setOpenIds(current => current.filter(item => item !== id)); return }
+    if (loadingDetail.includes(id)) return
+    setError(''); setOpenIds(current => current.includes(id) ? current : [...current, id])
     if (details[id]) return
     const abort = new AbortController()
     requests.current.set(id, abort); setLoadingDetail(current => [...current, id])
@@ -41,8 +42,8 @@ export function SnapshotBrowser({ token, projectId, selected = [], onSelectionCh
       if (!abort.signal.aborted) setDetails(previous => ({ ...previous, [id]: result }))
     } catch (err) {
       if (!abort.signal.aborted) setError(`Could not load snapshot files: ${message(err)}`)
-    } finally { requests.current.delete(id); if (!abort.signal.aborted) setLoadingDetail(current => current.filter(item => item !== id)) }
-  }, [token, projectId, openIds, selected, details])
+    } finally { if (requests.current.get(id) === abort) requests.current.delete(id); if (!abort.signal.aborted) setLoadingDetail(current => current.filter(item => item !== id)) }
+  }, [token, projectId, openIds, selected, details, loadingDetail])
 
   function toggle(snapshot: RepositorySnapshotSummary) {
     if (!onSelectionChange || !details[snapshot.id]) return
@@ -55,10 +56,10 @@ export function SnapshotBrowser({ token, projectId, selected = [], onSelectionCh
   }
 
   return <div className="repository-browser">
-    <div className="repository-browser-head"><div><h3>Saved snapshots</h3><p>Each snapshot is pinned to a commit. Open it to inspect every included file.</p></div><button type="button" className="button button-outline" onClick={() => setReload(value => value + 1)} disabled={loadingList}><RefreshCw size={15} />Refresh</button></div>
+    <div className="repository-browser-head"><div><h3>Saved snapshots</h3><p>Each snapshot is pinned to a commit. Open it to inspect every included file.</p></div><button type="button" className="button button-outline" onClick={() => { if (selected.length) onSelectionChange?.([]); setReload(value => value + 1) }} disabled={loadingList}><RefreshCw size={15} />Refresh</button></div>
     {error && <div className="error-banner" role="alert"><AlertCircle size={16} /><span>{error}</span></div>}
     {loadingList ? <div className="repository-loading"><LoaderCircle className="spin" size={17} />Loading snapshots…</div> : snapshots.length === 0 ? <div className="repository-empty">No snapshots in this project yet. Import exact files to add repository context.</div> : <div className="repository-list">{snapshots.map(snapshot => <article className={`repository-item ${selected.includes(snapshot.id) ? 'selected' : ''}`} key={snapshot.id}>
-      <div className="repository-item-top"><div><span className="repository-role">{snapshot.role}</span><h4>{snapshot.repository}</h4><p><GitBranch size={13} />{snapshot.ref} · <code title={snapshot.commit_sha}>{snapshot.commit_sha.slice(0, 12)}</code> · {formatDate(snapshot.created_at)}</p></div><button type="button" className="link-button" aria-expanded={openIds.includes(snapshot.id)} onClick={() => void open(snapshot.id)}>{openIds.includes(snapshot.id) ? selected.includes(snapshot.id) ? 'Files open for review' : 'Hide files' : 'Review files'}</button></div>
+      <div className="repository-item-top"><div><span className="repository-role">{snapshot.role}</span><h4>{snapshot.repository}</h4><p><GitBranch size={13} />{snapshot.ref} · <code title={snapshot.commit_sha}>{snapshot.commit_sha.slice(0, 12)}</code> · {formatDate(snapshot.created_at)}</p></div><button type="button" className="link-button" aria-expanded={openIds.includes(snapshot.id)} onClick={() => void open(snapshot.id)}>{openIds.includes(snapshot.id) ? details[snapshot.id] ? selected.includes(snapshot.id) ? 'Files open for review' : 'Hide files' : loadingDetail.includes(snapshot.id) ? 'Loading files…' : 'Retry files' : 'Review files'}</button></div>
       <div className="repository-item-meta"><span>{snapshot.file_count} {snapshot.file_count === 1 ? 'file' : 'files'}</span><span>{snapshot.total_bytes.toLocaleString()} bytes</span><span>content SHA-256 <code title={snapshot.content_sha256}>{snapshot.content_sha256.slice(0, 12)}</code></span></div>
       {openIds.includes(snapshot.id) && (loadingDetail.includes(snapshot.id) ? <div className="repository-loading"><LoaderCircle className="spin" size={16} />Loading complete file content…</div> : details[snapshot.id] && <div className="repository-files">
         <p className="repository-review-note"><ShieldCheck size={15} />Read the complete imported content below before consenting to share it with an AI provider. Source code can contain sensitive information despite import checks.</p>

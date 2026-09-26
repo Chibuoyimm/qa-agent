@@ -135,6 +135,39 @@ export type AiProposalResponse = {
   questions: string[]
   assumptions: string[]
   repository_snapshots?: RepositorySnapshotSummary[]
+  discovery_id?: string
+}
+
+export type DiscoveryStatus = 'queued' | 'running' | 'completed' | 'error' | 'cancelled'
+export type DiscoveryElement = {
+  test_id: string
+  tag: string
+  role: string
+  label: string
+  text: string
+  input_type: string
+}
+export type DiscoveryPage = {
+  path: string
+  title: string
+  headings: string[]
+  elements: DiscoveryElement[]
+  links: { path: string; text: string }[]
+  truncated: boolean
+}
+export type Discovery = {
+  id: string
+  project_id: string
+  base_url: string
+  start_path: string
+  max_pages: number
+  setup_scenario?: Scenario
+  status: DiscoveryStatus
+  result?: { pages: DiscoveryPage[]; limited: boolean; warnings: string[] }
+  error: string
+  created_at: string
+  started_at?: string
+  finished_at?: string
 }
 
 export type RepositoryRole = 'frontend' | 'backend'
