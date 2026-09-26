@@ -273,7 +273,7 @@ func safeText(content []byte) bool {
 
 type requestBudget struct {
 	requests int
-	bytes int64
+	bytes    int64
 }
 
 func (c *Client) get(ctx context.Context, endpoint, token string, limit int64, budget *requestBudget, target any) error {

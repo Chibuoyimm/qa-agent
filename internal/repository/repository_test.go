@@ -144,7 +144,9 @@ func TestRequestAndResponseBudgets(t *testing.T) {
 		calls++
 		return response(200, `{"ok":true}`), nil
 	}))
-	var target struct { OK bool `json:"ok"` }
+	var target struct {
+		OK bool `json:"ok"`
+	}
 	budget := requestBudget{requests: maxAPIRequests}
 	if err := client.get(context.Background(), "https://api.github.com/test", "", 100, &budget, &target); !errors.Is(err, ErrInvalid) || calls != 0 {
 		t.Fatalf("request budget: err=%v calls=%d", err, calls)
