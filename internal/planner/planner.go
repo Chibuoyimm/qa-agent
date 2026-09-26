@@ -31,11 +31,12 @@ var (
 var schemaFile embed.FS
 
 type Input struct {
-	Prompt         string `json:"prompt"`
-	Context        string `json:"context"`
-	Model          string `json:"model"`
-	CredentialMode string `json:"credential_mode"`
-	Consent        bool   `json:"consent"`
+	Prompt                string   `json:"prompt"`
+	Context               string   `json:"context"`
+	Model                 string   `json:"model"`
+	CredentialMode        string   `json:"credential_mode"`
+	Consent               bool     `json:"consent"`
+	RepositorySnapshotIDs []string `json:"repository_snapshot_ids,omitempty"`
 }
 
 type Config struct {
@@ -46,12 +47,13 @@ type Config struct {
 }
 
 type Result struct {
-	Provider      string             `json:"provider"`
-	Model         string             `json:"model"`
-	ContextSHA256 string             `json:"context_sha256"`
-	Scenarios     []qa.ScenarioInput `json:"scenarios"`
-	Questions     []string           `json:"questions"`
-	Assumptions   []string           `json:"assumptions"`
+	Provider            string                 `json:"provider"`
+	Model               string                 `json:"model"`
+	ContextSHA256       string                 `json:"context_sha256"`
+	Scenarios           []qa.ScenarioInput     `json:"scenarios"`
+	Questions           []string               `json:"questions"`
+	Assumptions         []string               `json:"assumptions"`
+	RepositorySnapshots []qa.RepositorySummary `json:"repository_snapshots"`
 }
 
 type Planner struct {
@@ -104,8 +106,19 @@ func (p *Planner) Config() Config {
 }
 
 func (p *Planner) Validate(in Input, byokKey string) error {
-	if len(strings.TrimSpace(in.Prompt)) == 0 || len(in.Prompt) > 4000 || len(strings.TrimSpace(in.Context)) == 0 || len(in.Context) > 60000 || !in.Consent {
+	if len(strings.TrimSpace(in.Prompt)) == 0 || len(in.Prompt) > 4000 ||
+		(len(strings.TrimSpace(in.Context)) == 0 && len(in.RepositorySnapshotIDs) == 0) || len(in.Context) > 60000 || !in.Consent {
 		return fmt.Errorf("%w: prompt, context, and explicit consent are required within size limits", ErrInvalid)
+	}
+	if len(in.RepositorySnapshotIDs) > 2 {
+		return fmt.Errorf("%w: select at most two repository snapshots", ErrInvalid)
+	}
+	seenIDs := make(map[string]bool, len(in.RepositorySnapshotIDs))
+	for _, id := range in.RepositorySnapshotIDs {
+		if id == "" || seenIDs[id] {
+			return fmt.Errorf("%w: repository_snapshot_ids must be nonempty and unique", ErrInvalid)
+		}
+		seenIDs[id] = true
 	}
 	if len(p.models) == 0 {
 		return ErrUnavailable
@@ -175,6 +188,9 @@ const instructions = `Return JSON matching the supplied schema. Propose only exe
 func (p *Planner) Propose(ctx context.Context, in Input, byokKey string) (Result, error) {
 	if err := p.Validate(in, byokKey); err != nil {
 		return Result{}, err
+	}
+	if len(strings.TrimSpace(in.Context)) == 0 {
+		return Result{}, fmt.Errorf("%w: assembled context is required", ErrInvalid)
 	}
 	select {
 	case p.slots <- struct{}{}:
@@ -293,5 +309,5 @@ func (p *Planner) Propose(ctx context.Context, in Input, byokKey string) (Result
 		}
 	}
 	hash := sha256.Sum256([]byte(in.Context))
-	return Result{Provider: "openai", Model: in.Model, ContextSHA256: hex.EncodeToString(hash[:]), Scenarios: proposed.Scenarios, Questions: proposed.Questions, Assumptions: proposed.Assumptions}, nil
+	return Result{Provider: "openai", Model: in.Model, ContextSHA256: hex.EncodeToString(hash[:]), Scenarios: proposed.Scenarios, Questions: proposed.Questions, Assumptions: proposed.Assumptions, RepositorySnapshots: []qa.RepositorySummary{}}, nil
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/Chibuoyimm/qa-agent/internal/httpapi"
 	"github.com/Chibuoyimm/qa-agent/internal/planner"
 	"github.com/Chibuoyimm/qa-agent/internal/qa"
+	"github.com/Chibuoyimm/qa-agent/internal/repository"
 	"github.com/Chibuoyimm/qa-agent/migrations"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -61,7 +62,7 @@ func run(logger *slog.Logger) error {
 	}
 	server := &http.Server{
 		Addr:              addr,
-		Handler:           httpapi.New(qa.NewStore(db, allowed), proposals, apiToken, workerToken, logger).Handler(),
+		Handler:           httpapi.New(qa.NewStore(db, allowed), proposals, repository.New(nil), apiToken, workerToken, logger).Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      100 * time.Second,
