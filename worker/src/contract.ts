@@ -35,38 +35,40 @@ export function parseClaim(value: unknown): Claim {
   if (typeof run.id !== 'string' || !run.id || typeof run.base_url !== 'string' || !Array.isArray(run.scenarios) || run.scenarios.length === 0 || run.scenarios.length > 50) {
     throw new Error('Invalid run snapshot');
   }
-  const scenarios: Scenario[] = run.scenarios.map((candidate) => {
-    if (!record(candidate) || typeof candidate.id !== 'string' || !candidate.id || !Array.isArray(candidate.steps) || candidate.steps.length === 0 || candidate.steps.length > 50) {
-      throw new Error('Invalid scenario snapshot');
-    }
-    const steps: Step[] = candidate.steps.map((step) => {
-      if (!record(step) || !['navigate', 'fill', 'click', 'assert_text', 'assert_visible'].includes(String(step.action))) {
-        throw new Error('Invalid step snapshot');
-      }
-      const action = step.action as Step['action'];
-      if (action === 'navigate') {
-        if (!onlyFields(step, ['action', 'path']) || typeof step.path !== 'string' || step.path.length > 2048 || !step.path.startsWith('/') || step.path.startsWith('//') || /[?#\\]/.test(step.path) || step.path.includes('..') || new URL(step.path, 'http://example.test').origin !== 'http://example.test') throw new Error('Invalid navigation path');
-        return { action, path: step.path };
-      }
-      if (typeof step.test_id !== 'string' || !/^[\x21-\x7e]{1,200}$/.test(step.test_id) || /['"\\]/.test(step.test_id)) throw new Error('Invalid test ID');
-      if (action === 'fill') {
-        const literal = typeof step.value === 'string';
-        const secret = typeof step.secret_env === 'string' && step.secret_env.length <= 100 && /^QA_TEST_[A-Z0-9_]+$/.test(step.secret_env);
-        if (!onlyFields(step, ['action', 'test_id', 'value', 'secret_env']) || literal === secret || (literal && 'secret_env' in step) || (secret && 'value' in step) || (literal && (step.value as string).length > 4000)) throw new Error('Invalid fill value');
-        return { action, test_id: step.test_id, ...(literal ? { value: step.value as string } : { secret_env: step.secret_env as string }) };
-      }
-      if (action === 'assert_text') {
-        if (!onlyFields(step, ['action', 'test_id', 'value']) || typeof step.value !== 'string' || step.value.length > 4000) throw new Error('Invalid expected text');
-        return { action, test_id: step.test_id, value: step.value };
-      }
-      if (!onlyFields(step, ['action', 'test_id'])) throw new Error('Invalid action fields');
-      return { action, test_id: step.test_id };
-    });
-    if (!steps.some(step => step.action === 'assert_text' || step.action === 'assert_visible')) throw new Error('Scenario has no approved assertion');
-    return { id: candidate.id, steps };
-  });
+  const scenarios: Scenario[] = run.scenarios.map(parseScenario);
   if (new Set(scenarios.map(s => s.id)).size !== scenarios.length) throw new Error('Duplicate scenario ID');
   return { run: { id: run.id, base_url: run.base_url, scenarios }, lease_token: value.lease_token, lease_expires_at: String(value.lease_expires_at ?? '') };
+}
+
+export function parseScenario(candidate: unknown): Scenario {
+  if (!record(candidate) || typeof candidate.id !== 'string' || !candidate.id || !Array.isArray(candidate.steps) || candidate.steps.length === 0 || candidate.steps.length > 50) {
+    throw new Error('Invalid scenario snapshot');
+  }
+  const steps: Step[] = candidate.steps.map((step) => {
+    if (!record(step) || !['navigate', 'fill', 'click', 'assert_text', 'assert_visible'].includes(String(step.action))) {
+      throw new Error('Invalid step snapshot');
+    }
+    const action = step.action as Step['action'];
+    if (action === 'navigate') {
+      if (!onlyFields(step, ['action', 'path']) || typeof step.path !== 'string' || step.path.length > 2048 || !step.path.startsWith('/') || step.path.startsWith('//') || /[?#\\]/.test(step.path) || step.path.includes('..') || new URL(step.path, 'http://example.test').origin !== 'http://example.test') throw new Error('Invalid navigation path');
+      return { action, path: step.path };
+    }
+    if (typeof step.test_id !== 'string' || !/^[\x21-\x7e]{1,200}$/.test(step.test_id) || /['"\\]/.test(step.test_id)) throw new Error('Invalid test ID');
+    if (action === 'fill') {
+      const literal = typeof step.value === 'string';
+      const secret = typeof step.secret_env === 'string' && step.secret_env.length <= 100 && /^QA_TEST_[A-Z0-9_]+$/.test(step.secret_env);
+      if (!onlyFields(step, ['action', 'test_id', 'value', 'secret_env']) || literal === secret || (literal && 'secret_env' in step) || (secret && 'value' in step) || (literal && (step.value as string).length > 4000)) throw new Error('Invalid fill value');
+      return { action, test_id: step.test_id, ...(literal ? { value: step.value as string } : { secret_env: step.secret_env as string }) };
+    }
+    if (action === 'assert_text') {
+      if (!onlyFields(step, ['action', 'test_id', 'value']) || typeof step.value !== 'string' || step.value.length > 4000) throw new Error('Invalid expected text');
+      return { action, test_id: step.test_id, value: step.value };
+    }
+    if (!onlyFields(step, ['action', 'test_id'])) throw new Error('Invalid action fields');
+    return { action, test_id: step.test_id };
+  });
+  if (!steps.some(step => step.action === 'assert_text' || step.action === 'assert_visible')) throw new Error('Scenario has no approved assertion');
+  return { id: candidate.id, steps };
 }
 
 export function parseAllowedOrigins(value: string): Set<string> {

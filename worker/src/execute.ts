@@ -1,6 +1,7 @@
 import { mkdir, rename } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';
 import type { Browser, BrowserContext, Page } from 'playwright';
+import { openGuardedPage } from './browser-context.js';
 import { safePart, validateBaseUrl, type Artifact, type Run, type Scenario, type ScenarioResult } from './contract.js';
 
 const STEP_TIMEOUT_MS = 8000;
@@ -8,26 +9,11 @@ const SCENARIO_TIMEOUT_MS = 60000;
 
 class AssertionFailure extends Error {}
 class MissingSecret extends Error {}
-class ForbiddenRequest extends Error {}
 
 function artifactPath(root: string, file: string): string {
   const path = relative(root, file).split(sep).join('/');
   if (!path || path.startsWith('../') || path.startsWith('/') || path.includes('..')) throw new Error('Invalid artifact path');
   return path;
-}
-
-function isAllowedRequest(url: string, origins: Set<string>): boolean {
-  let parsed: URL;
-  try { parsed = new URL(url); } catch { return false; }
-  if (parsed.protocol === 'data:' || parsed.protocol === 'blob:') return true;
-  return ['http:', 'https:'].includes(parsed.protocol) && origins.has(parsed.origin);
-}
-
-function isAllowedMainFrame(url: string, origins: Set<string>): boolean {
-  try {
-    const parsed = new URL(url);
-    return ['http:', 'https:'].includes(parsed.protocol) && origins.has(parsed.origin);
-  } catch { return false; }
 }
 
 async function assertText(page: Page, testId: string, expected: string): Promise<void> {
@@ -44,7 +30,7 @@ async function assertText(page: Page, testId: string, expected: string): Promise
   throw new AssertionFailure('Text did not match the approved expected value');
 }
 
-async function executeSteps(page: Page, scenario: Scenario, base: URL, signal: AbortSignal): Promise<void> {
+export async function executeSteps(page: Page, scenario: Scenario, base: URL, signal: AbortSignal): Promise<void> {
   for (const step of scenario.steps) {
     if (signal.aborted) throw new Error('Execution interrupted');
     switch (step.action) {
@@ -84,93 +70,25 @@ export async function executeScenario(browser: Browser, run: Run, scenario: Scen
   let page: Page | undefined;
   let status: ScenarioResult['status'] = 'passed';
   let message = 'Approved checks passed';
-  let forbidden = false;
-  let unsupportedSocket = false;
-  let popupAttempt = false;
-  let unsupportedFrame = false;
+  let guarded: Awaited<ReturnType<typeof openGuardedPage>> | undefined;
   const timeout = AbortSignal.timeout(SCENARIO_TIMEOUT_MS);
   const combined = AbortSignal.any([signal, timeout]);
   const stop = () => { void page?.close().catch(() => {}); };
   combined.addEventListener('abort', stop, { once: true });
   try {
-    context = await browser.newContext({
-      serviceWorkers: 'block',
+    guarded = await openGuardedPage(browser, allowedOrigins, {
       recordVideo: { dir: directory, size: { width: 1280, height: 720 } },
       viewport: { width: 1280, height: 720 },
     });
-    await context.routeWebSocket(/.*/, async socket => {
-      // This pilot has no WebSocket scenarios. Reject handshakes before they reach a target.
-      unsupportedSocket = true;
-      await socket.close();
-    });
-    page = await context.newPage();
-    const mainPage = page;
-    context.on('page', opened => {
-      if (opened !== mainPage) {
-        popupAttempt = true;
-        void opened.close().catch(() => {});
-      }
-    });
-    await context.route('**/*', async route => {
-      // CDP covers the main page and native redirects. Keep a context-level guard
-      // for direct off-origin requests and targets outside that CDP session.
-      if (!isAllowedRequest(route.request().url(), allowedOrigins)) {
-        forbidden = true;
-        await route.abort('blockedbyclient').catch(() => {});
-        return;
-      }
-      try {
-        const frame = route.request().frame();
-        if (frame.page() !== mainPage) {
-          popupAttempt = true;
-          await route.abort('blockedbyclient');
-          return;
-        }
-        if (frame !== mainPage.mainFrame()) {
-          // A page CDP session need not cover a cross-process iframe's redirects.
-          unsupportedFrame = true;
-          await route.abort('blockedbyclient');
-          return;
-        }
-      } catch {
-        popupAttempt = true;
-        await route.abort('blockedbyclient').catch(() => {});
-        return;
-      }
-      await route.continue().catch(() => {});
-    });
-    const cdp = await context.newCDPSession(page);
-    cdp.on('Fetch.requestPaused', ({ requestId, request }: { requestId: string; request: { url: string } }) => {
-      if (!isAllowedRequest(request.url, allowedOrigins)) {
-        forbidden = true;
-        void cdp.send('Fetch.failRequest', { requestId, errorReason: 'BlockedByClient' }).catch(() => {});
-      } else {
-        void cdp.send('Fetch.continueRequest', { requestId }).catch(() => {});
-      }
-    });
-    await cdp.send('Fetch.enable', { patterns: [{ urlPattern: '*', requestStage: 'Request' }] });
-    page.on('framenavigated', frame => {
-      if (frame === page?.mainFrame() && frame.url() !== 'about:blank' && !isAllowedMainFrame(frame.url(), allowedOrigins)) {
-        forbidden = true;
-        void page?.close().catch(() => {});
-      }
-    });
+    context = guarded.context;
+    page = guarded.page;
     await executeSteps(page, scenario, base, combined);
-    if (forbidden) throw new ForbiddenRequest('Target attempted a request outside allowed origins');
-    if (unsupportedSocket) throw new Error('Unsupported WebSocket');
-    if (popupAttempt) throw new Error('Popup unsupported');
-    if (unsupportedFrame) throw new Error('Iframe unsupported');
+    if (guarded.violation()) throw new Error(guarded.violation());
   } catch (error) {
-    if (forbidden || error instanceof ForbiddenRequest) {
-      status = 'error'; message = 'Target requested an origin outside the worker allowlist';
+    if (guarded?.violation()) {
+      status = 'error'; message = guarded.violation();
     } else if (error instanceof MissingSecret) {
       status = 'blocked'; message = 'A referenced QA_TEST_ secret is unavailable';
-    } else if (unsupportedSocket) {
-      status = 'error'; message = 'Target attempted a WebSocket connection, unsupported in this pilot';
-    } else if (popupAttempt) {
-      status = 'error'; message = 'Target attempted a popup, unsupported in this pilot';
-    } else if (unsupportedFrame) {
-      status = 'error'; message = 'Target attempted an iframe request, unsupported in this pilot';
     } else if (error instanceof AssertionFailure) {
       status = 'failed'; message = error.message;
     } else {
@@ -197,6 +115,7 @@ export async function executeScenario(browser: Browser, run: Run, scenario: Scen
       } catch { /* Video may be missing after a browser crash. */ }
     }
   }
+  if (guarded?.violation()) { status = 'error'; message = guarded.violation(); }
   return { scenario_id: scenario.id, status, message, duration_ms: Date.now() - started, artifacts };
 }
 

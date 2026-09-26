@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import { chromium, type Browser } from 'playwright';
 import { parseAllowedOrigins, parseClaim, safePart, validateBaseUrl, type Claim, type ScenarioResult } from './contract.js';
+import { discover, parseDiscoveryClaim, type DiscoveryClaim, type DiscoveryResult } from './discover.js';
 import { errorResult, executeScenario } from './execute.js';
 
 const POLL_MS = 2000;
@@ -112,13 +113,55 @@ async function processRun(claimed: Claim): Promise<void> {
   }
 }
 
+async function processDiscovery(claimed: DiscoveryClaim): Promise<void> {
+  const { discovery: job, lease_token: leaseToken } = claimed;
+  const controller = new AbortController();
+  const signal = AbortSignal.any([controller.signal, shutdown.signal, AbortSignal.timeout(90000)]);
+  let leaseLost = false;
+  let heartbeat: Promise<void> | undefined;
+  const timer = setInterval(() => {
+    if (heartbeat || signal.aborted) return;
+    heartbeat = post(`/api/worker/discoveries/${encodeURIComponent(job.id)}/heartbeat`, { lease_token: leaseToken }, signal)
+      .then(response => { if (!response.ok) throw new Error('Discovery lease unavailable'); })
+      .catch(() => { leaseLost = true; controller.abort(); })
+      .finally(() => { heartbeat = undefined; });
+  }, HEARTBEAT_MS);
+  let browser: Browser | undefined;
+  let result: DiscoveryResult | undefined;
+  let error = '';
+  try {
+    validateBaseUrl(job.base_url, allowedOrigins);
+    browser = await chromium.launch({ headless: true });
+    result = await discover(browser, job, allowedOrigins, signal);
+  } catch {
+    // Browser exceptions may include page text, URLs, or credentials. Never forward them.
+    error = signal.aborted ? 'Discovery was interrupted or exceeded its time limit' : 'Browser discovery could not complete; check target availability, setup credentials, and permitted browser features';
+  } finally {
+    clearInterval(timer);
+    if (heartbeat) await heartbeat;
+    if (browser) await browser.close().catch(() => {});
+  }
+  if (leaseLost || shutdown.signal.aborted) return;
+  try {
+    const response = await post(`/api/worker/discoveries/${encodeURIComponent(job.id)}/complete`, { lease_token: leaseToken, ...(result ? { result } : { error }) });
+    if (response.status === 409) return;
+    if (!response.ok) throw new Error('Discovery completion rejected');
+    console.log(`Completed discovery ${safePart(job.id)}: ${result ? 'observed' : 'error'}`);
+  } catch { console.error(`Could not complete discovery ${safePart(job.id)}; its lease will expire as an error`); }
+}
+
 async function main(): Promise<void> {
   console.log(`Worker ${workerId} started`);
   while (!shutdown.signal.aborted) {
     try {
       const claimed = await claim();
       if (claimed) await processRun(claimed);
-      else await sleep(POLL_MS, shutdown.signal);
+      else {
+        const response = await post('/api/worker/discoveries/claim', { worker_id: workerId }, shutdown.signal);
+        if (response.status === 204) await sleep(POLL_MS, shutdown.signal);
+        else if (response.ok) await processDiscovery(parseDiscoveryClaim(await response.json()));
+        else throw new Error('Discovery claim failed');
+      }
     } catch {
       if (!shutdown.signal.aborted) {
         console.error('Worker API unavailable or returned an invalid claim; retrying');
