@@ -15,10 +15,17 @@ import (
 	"testing"
 
 	"github.com/Chibuoyimm/qa-agent/internal/httpapi"
+	"github.com/Chibuoyimm/qa-agent/internal/planner"
 	"github.com/Chibuoyimm/qa-agent/internal/qa"
 	"github.com/Chibuoyimm/qa-agent/migrations"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+type rejectingTransport struct{}
+
+func (rejectingTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	panic("provider must not be called")
+}
 
 func TestHTTPBoundary(t *testing.T) {
 	dsn := os.Getenv("TEST_DATABASE_URL")
@@ -57,11 +64,16 @@ func TestHTTPBoundary(t *testing.T) {
 	if err := migrations.Apply(ctx, testDB); err != nil {
 		t.Fatal(err)
 	}
-	server := httptest.NewServer(httpapi.New(qa.NewStore(testDB, map[string]bool{"http://localhost:4174": true}), "api-token", "worker-token", slog.New(slog.NewTextHandler(io.Discard, nil))).Handler())
+	proposals, err := planner.New("", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(httpapi.New(qa.NewStore(testDB, map[string]bool{"http://localhost:4174": true}), proposals, "api-token", "worker-token", slog.New(slog.NewTextHandler(io.Discard, nil))).Handler())
 	defer server.Close()
+	baseURL := server.URL
 	request := func(method, path, token, body string) (*http.Response, []byte) {
 		t.Helper()
-		req, err := http.NewRequest(method, server.URL+path, strings.NewReader(body))
+		req, err := http.NewRequest(method, baseURL+path, strings.NewReader(body))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -85,6 +97,13 @@ func TestHTTPBoundary(t *testing.T) {
 	if resp, _ := request("GET", "/api/projects", "", ""); resp.StatusCode != 401 {
 		t.Fatalf("missing auth: %d", resp.StatusCode)
 	}
+	if resp, _ := request("GET", "/api/ai/config", "", ""); resp.StatusCode != 401 {
+		t.Fatalf("AI config auth: %d", resp.StatusCode)
+	}
+	resp, body := request("GET", "/api/ai/config", "api-token", "")
+	if resp.StatusCode != 200 || !bytes.Contains(body, []byte(`"models":[]`)) || !bytes.Contains(body, []byte(`"managed_available":false`)) {
+		t.Fatalf("AI config: %d %s", resp.StatusCode, body)
+	}
 	if resp, _ := request("POST", "/api/worker/claim", "api-token", `{"worker_id":"worker"}`); resp.StatusCode != 401 {
 		t.Fatalf("worker token separation: %d", resp.StatusCode)
 	}
@@ -97,7 +116,7 @@ func TestHTTPBoundary(t *testing.T) {
 	if resp, _ := request("POST", "/api/projects", "api-token", `{"name":"pilot","base_url":"http://example.test"}`); resp.StatusCode != 400 {
 		t.Fatalf("origin: %d", resp.StatusCode)
 	}
-	resp, body := request("POST", "/api/projects", "api-token", `{"name":"pilot","base_url":"http://localhost:4174"}`)
+	resp, body = request("POST", "/api/projects", "api-token", `{"name":"pilot","base_url":"http://localhost:4174"}`)
 	if resp.StatusCode != 201 {
 		t.Fatalf("create project: %d %s", resp.StatusCode, body)
 	}
@@ -105,6 +124,44 @@ func TestHTTPBoundary(t *testing.T) {
 	if err := json.Unmarshal(body, &project); err != nil {
 		t.Fatal(err)
 	}
+	if resp, _ := request("POST", "/api/projects/"+project.ID+"/proposals", "api-token", `{"prompt":"check","context":"context","model":"test-model","credential_mode":"byok","consent":true,"extra":1}`); resp.StatusCode != 400 {
+		t.Fatalf("unknown proposal field: %d", resp.StatusCode)
+	}
+	if resp, _ := request("POST", "/api/projects/"+project.ID+"/proposals", "api-token", `{"prompt":"check","context":"context","model":"test-model","credential_mode":"byok","consent":true}`); resp.StatusCode != 503 {
+		t.Fatalf("unconfigured model: %d", resp.StatusCode)
+	}
+	guardPlanner, err := planner.New("test-model", "", rejectingTransport{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	guardServer := httptest.NewServer(httpapi.New(qa.NewStore(testDB, map[string]bool{"http://localhost:4174": true}), guardPlanner, "api-token", "worker-token", slog.New(slog.NewTextHandler(io.Discard, nil))).Handler())
+	defer guardServer.Close()
+	baseURL = guardServer.URL
+	validProposal := `{"prompt":"check","context":"context","model":"test-model","credential_mode":"byok","consent":true}`
+	if resp, _ := request("POST", "/api/projects/"+project.ID+"/proposals", "api-token", strings.Replace(validProposal, `"consent":true`, `"consent":false`, 1)); resp.StatusCode != 400 {
+		t.Fatalf("missing consent: %d", resp.StatusCode)
+	}
+	if resp, _ := request("POST", "/api/projects/"+project.ID+"/proposals", "api-token", strings.Replace(validProposal, `"byok"`, `"managed"`, 1)); resp.StatusCode != 503 {
+		t.Fatalf("managed unavailable: %d", resp.StatusCode)
+	}
+	if resp, _ := request("POST", "/api/projects/missing/proposals", "api-token", validProposal); resp.StatusCode != 400 {
+		t.Fatalf("missing BYOK key: %d", resp.StatusCode)
+	}
+	req, err := http.NewRequest(http.MethodPost, baseURL+"/api/projects/missing/proposals", strings.NewReader(validProposal))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer api-token")
+	req.Header.Set("X-QA-Provider-Key", "test-only-key")
+	missing, err := guardServer.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	missing.Body.Close()
+	if missing.StatusCode != 404 {
+		t.Fatalf("missing project: %d", missing.StatusCode)
+	}
+	baseURL = server.URL
 	t.Cleanup(func() {
 		for _, query := range []string{`DELETE FROM runs WHERE project_id=$1`, `DELETE FROM scenarios WHERE project_id=$1`, `DELETE FROM projects WHERE id=$1`} {
 			if _, err := testDB.Exec(ctx, query, project.ID); err != nil {

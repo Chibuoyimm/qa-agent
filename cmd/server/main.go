@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Chibuoyimm/qa-agent/internal/httpapi"
+	"github.com/Chibuoyimm/qa-agent/internal/planner"
 	"github.com/Chibuoyimm/qa-agent/internal/qa"
 	"github.com/Chibuoyimm/qa-agent/migrations"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -54,12 +55,16 @@ func run(logger *slog.Logger) error {
 	if err := migrations.Apply(startup, db); err != nil {
 		return err
 	}
+	proposals, err := planner.New(os.Getenv("QA_OPENAI_MODELS"), os.Getenv("QA_OPENAI_API_KEY"), nil)
+	if err != nil {
+		return err
+	}
 	server := &http.Server{
 		Addr:              addr,
-		Handler:           httpapi.New(qa.NewStore(db, allowed), apiToken, workerToken, logger).Handler(),
+		Handler:           httpapi.New(qa.NewStore(db, allowed), proposals, apiToken, workerToken, logger).Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
-		WriteTimeout:      30 * time.Second,
+		WriteTimeout:      100 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
 	server.RegisterOnShutdown(func() { logger.Info("server shut down") })

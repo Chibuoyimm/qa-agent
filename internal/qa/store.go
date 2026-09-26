@@ -63,6 +63,16 @@ func (s *Store) ListProjects(ctx context.Context) ([]Project, error) {
 	return projects, rows.Err()
 }
 
+func (s *Store) GetProject(ctx context.Context, id string) (Project, error) {
+	var p Project
+	err := s.db.QueryRow(ctx, `SELECT id,name,base_url,created_at FROM projects WHERE id=$1`, id).
+		Scan(&p.ID, &p.Name, &p.BaseURL, &p.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Project{}, ErrNotFound
+	}
+	return p, err
+}
+
 func (s *Store) CreateScenario(ctx context.Context, projectID string, in ScenarioInput) (Scenario, error) {
 	in, err := ValidateScenario(in)
 	if err != nil {

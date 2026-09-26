@@ -1,0 +1,40 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["scenarios", "questions", "assumptions"],
+  "properties": {
+    "scenarios": {
+      "type": "array",
+      "maxItems": 10,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "description", "expected_outcome", "steps"],
+        "properties": {
+          "name": {"type": "string"},
+          "description": {"type": "string"},
+          "expected_outcome": {"type": "string"},
+          "steps": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 50,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["action", "path", "test_id", "value", "secret_env"],
+              "properties": {
+                "action": {"type": "string", "enum": ["navigate", "fill", "click", "assert_text", "assert_visible"]},
+                "path": {"type": ["string", "null"]},
+                "test_id": {"type": ["string", "null"]},
+                "value": {"type": ["string", "null"]},
+                "secret_env": {"type": ["string", "null"]}
+              }
+            }
+          }
+        }
+      }
+    },
+    "questions": {"type": "array", "maxItems": 20, "items": {"type": "string"}},
+    "assumptions": {"type": "array", "maxItems": 20, "items": {"type": "string"}}
+  }
+}

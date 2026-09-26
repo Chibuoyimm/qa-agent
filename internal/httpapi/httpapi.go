@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -10,18 +11,20 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Chibuoyimm/qa-agent/internal/planner"
 	"github.com/Chibuoyimm/qa-agent/internal/qa"
 )
 
 type API struct {
 	store       *qa.Store
+	planner     *planner.Planner
 	apiToken    string
 	workerToken string
 	logger      *slog.Logger
 }
 
-func New(store *qa.Store, apiToken, workerToken string, logger *slog.Logger) *API {
-	return &API{store: store, apiToken: apiToken, workerToken: workerToken, logger: logger}
+func New(store *qa.Store, proposals *planner.Planner, apiToken, workerToken string, logger *slog.Logger) *API {
+	return &API{store: store, planner: proposals, apiToken: apiToken, workerToken: workerToken, logger: logger}
 }
 
 func (a *API) Handler() http.Handler {
@@ -42,7 +45,17 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("POST /api/worker/claim", a.authorize(a.workerToken, a.claimRun))
 	mux.Handle("POST /api/worker/runs/{id}/heartbeat", a.authorize(a.workerToken, a.heartbeat))
 	mux.Handle("POST /api/worker/runs/{id}/complete", a.authorize(a.workerToken, a.completeRun))
-	return mux
+	mux.Handle("GET /api/ai/config", a.authorize(a.apiToken, a.aiConfig))
+	mux.Handle("POST /api/projects/{id}/proposals", a.authorize(a.apiToken, a.propose))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		deadline := 25 * time.Second
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/proposals") {
+			deadline = 95 * time.Second
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), deadline)
+		defer cancel()
+		mux.ServeHTTP(w, r.WithContext(ctx))
+	})
 }
 
 func (a *API) authorize(token string, next http.HandlerFunc) http.Handler {
@@ -59,7 +72,11 @@ func (a *API) authorize(token string, next http.HandlerFunc) http.Handler {
 const maxBodyBytes = 1 << 20
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
-	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+	return decodeJSONLimit(w, r, dst, maxBodyBytes)
+}
+
+func decodeJSONLimit(w http.ResponseWriter, r *http.Request, dst any, limit int64) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(dst); err != nil {
@@ -94,10 +111,46 @@ func (a *API) fail(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, "record not found")
 	case errors.Is(err, qa.ErrConflict):
 		writeError(w, http.StatusConflict, "invalid run state or lease")
+	case errors.Is(err, planner.ErrInvalid):
+		writeError(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, planner.ErrUnavailable):
+		writeError(w, http.StatusServiceUnavailable, "proposal access is not configured")
+	case errors.Is(err, planner.ErrBusy):
+		writeError(w, http.StatusTooManyRequests, "proposal generation is busy")
+	case errors.Is(err, planner.ErrTimeout):
+		writeError(w, http.StatusGatewayTimeout, "proposal provider timed out")
+	case errors.Is(err, planner.ErrUpstream):
+		writeError(w, http.StatusBadGateway, "proposal provider failed or returned invalid output")
 	default:
 		a.logger.Error("request failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "internal server error")
 	}
+}
+
+func (a *API) aiConfig(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, a.planner.Config())
+}
+
+func (a *API) propose(w http.ResponseWriter, r *http.Request) {
+	var in planner.Input
+	if !decodeJSONLimit(w, r, &in, 128<<10) {
+		return
+	}
+	key := r.Header.Get("X-QA-Provider-Key")
+	if err := a.planner.Validate(in, key); err != nil {
+		a.fail(w, err)
+		return
+	}
+	if _, err := a.store.GetProject(r.Context(), r.PathValue("id")); err != nil {
+		a.fail(w, err)
+		return
+	}
+	result, err := a.planner.Propose(r.Context(), in, key)
+	if err != nil {
+		a.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (a *API) listProjects(w http.ResponseWriter, r *http.Request) {
