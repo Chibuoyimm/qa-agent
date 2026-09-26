@@ -30,6 +30,7 @@ const port = async () => {
 const start = async (name, cmd, args, env) => {
   const file = await open(resolve(evidence, `${name}.log`), 'w'); files.push(file);
   const process = spawn(cmd, args, { cwd: root, env: { ...globalThis.process.env, ...env }, stdio: ['ignore', file.fd, file.fd] });
+  process.logPath = resolve(evidence, `${name}.log`);
   children.push(process); manifest.processes.push({ name, pid: process.pid });
   process.on('error', error => { process.launchError = error; });
   return process;
@@ -42,7 +43,10 @@ const stop = async process => {
 };
 const ready = async (url, process) => {
   for (let i = 0; i < 100; i++) {
-    if (process.launchError || process.exitCode !== null) throw new Error(`Service exited before readiness: ${url}`);
+    if (process.launchError || process.exitCode !== null) {
+      const log = await readFile(process.logPath, 'utf8');
+      throw new Error(`Service exited before readiness: ${url}\n${log.slice(-4000)}`);
+    }
     try { if ((await fetch(url, { signal: AbortSignal.timeout(500) })).ok) return; } catch {}
     await new Promise(r => setTimeout(r, 100));
   }
@@ -58,7 +62,9 @@ try {
   const dbPort = mapping.split(':').at(-1);
   let dbReady = false;
   for (let i = 0; i < 100; i++) {
-    const result = spawnSync('docker', ['exec', container, 'pg_isready', '-U', 'qa', '-d', 'qa_proof'], { stdio: 'ignore' });
+    // The image's temporary initialization server accepts Unix sockets before
+    // the final server is listening on TCP. The API needs the latter.
+    const result = spawnSync('docker', ['exec', container, 'pg_isready', '-h', '127.0.0.1', '-U', 'qa', '-d', 'qa_proof'], { stdio: 'ignore' });
     if (result.status === 0) { dbReady = true; break; }
     await new Promise(r => setTimeout(r, 200));
   }
