@@ -4,6 +4,7 @@ import {
   LockKeyhole, RefreshCw, ShieldCheck, Sparkles, Square, X,
 } from 'lucide-react'
 import { api, type AiConfig, type AiProposalResponse, type ScenarioInput } from './api'
+import { SnapshotBrowser } from './RepositorySnapshots'
 
 type CredentialMode = 'managed' | 'byok'
 
@@ -21,6 +22,7 @@ export default function AiProposals({ token, projectId, onClose, onReview }: {
   const [providerKey, setProviderKey] = useState('')
   const [prompt, setPrompt] = useState('')
   const [context, setContext] = useState('')
+  const [snapshotIds, setSnapshotIds] = useState<string[]>([])
   const [consent, setConsent] = useState(false)
   const [response, setResponse] = useState<AiProposalResponse | null>(null)
   const [requestError, setRequestError] = useState('')
@@ -43,7 +45,7 @@ export default function AiProposals({ token, projectId, onClose, onReview }: {
   }, [token, projectId])
 
   const configured = Boolean(config && config.models.length > 0 && (config.managed_available || config.byok_available))
-  const canGenerate = configured && !generating && Boolean(prompt.trim() && context.trim() && model && consent && (credentialMode === 'managed' || providerKey.trim()))
+  const canGenerate = configured && !generating && Boolean(prompt.trim() && (context.trim() || snapshotIds.length) && model && consent && (credentialMode === 'managed' || providerKey.trim()))
 
   async function generate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -51,7 +53,7 @@ export default function AiProposals({ token, projectId, onClose, onReview }: {
     if (!config || !configured) { setRequestError('AI proposal generation is not configured on this server.'); return }
     if (!config.models.includes(model)) { setRequestError('Choose a configured model.'); return }
     if (!prompt.trim() || prompt.length > 4000) { setRequestError('Testing request must be 1–4000 characters.'); return }
-    if (!context.trim() || context.length > 60000) { setRequestError('App context must be 1–60000 characters.'); return }
+    if ((!context.trim() && snapshotIds.length === 0) || context.length > 60000) { setRequestError('Add application context or select a reviewed repository snapshot.'); return }
     if (!consent) { setRequestError('Confirm consent to send these fields to OpenAI.'); return }
     if (credentialMode === 'managed' && !config.managed_available) { setRequestError('Managed access is unavailable on this server.'); return }
     if (credentialMode === 'byok' && (!config.byok_available || !providerKey.trim())) { setRequestError('Enter a provider key to use BYOK.'); return }
@@ -68,7 +70,7 @@ export default function AiProposals({ token, projectId, onClose, onReview }: {
         method: 'POST',
         signal: abort.signal,
         headers: credentialMode === 'byok' ? { 'X-QA-Provider-Key': transientKey } : undefined,
-        body: JSON.stringify({ prompt: prompt.trim(), context: context.trim(), model, credential_mode: credentialMode, consent: true }),
+        body: JSON.stringify({ prompt: prompt.trim(), context: context.trim(), model, credential_mode: credentialMode, consent: true, repository_snapshot_ids: snapshotIds }),
       })
       if (currentRequest === requestNumber.current && !abort.signal.aborted) setResponse(result)
     } catch (error) {
@@ -90,14 +92,15 @@ export default function AiProposals({ token, projectId, onClose, onReview }: {
 
   return <section className="ai-panel" aria-label="AI scenario proposals">
     <div className="ai-panel-head"><div className="ai-panel-icon"><Sparkles size={20} /></div><div><div className="eyebrow">AI ASSISTED DRAFTING</div><h2>Ask AI to propose checks</h2><p>Describe what you want to test and supply the relevant facts. You review every draft before it can run.</p></div><button className="icon-button" onClick={onClose} aria-label="Close AI proposals"><X size={19} /></button></div>
-    <div className="ai-boundary"><Info size={16} /><span>Proposals use only the request and context you enter here. This does not inspect your repository, explore the app, or run a browser.</span></div>
+    <div className="ai-boundary"><Info size={16} /><span>Proposals use your request, application context, and any exact repository snapshots you select after reviewing their files. They do not explore the app or run a browser.</span></div>
+    <div className="ai-repository-section"><div className="ai-repository-heading"><div><div className="eyebrow">OPTIONAL SOURCE CONTEXT</div><h3>Review repository snapshots</h3><p>Select up to one frontend and one backend snapshot. The complete file contents will be sent with your request after consent.</p></div></div><SnapshotBrowser token={token} projectId={projectId} selected={snapshotIds} onSelectionChange={ids => { setSnapshotIds(ids); setConsent(false); setResponse(null) }} /></div>
     {configLoading ? <div className="ai-config-state"><LoaderCircle size={18} className="spin" />Checking model availability…</div>
       : configError ? <div className="error-banner"><AlertCircle size={17} /><span>Could not load AI configuration: {configError}</span></div>
         : !config || !configured ? <div className="ai-unavailable"><LockKeyhole size={22} /><div><strong>Proposal generation is unavailable</strong><p>{config?.models.length === 0 ? 'No model IDs are configured in QA_OPENAI_MODELS.' : 'Neither managed access nor BYOK is enabled on this server.'} Ask the operator to configure access, then reopen this panel.</p></div></div>
           : <form onSubmit={event => void generate(event)}>
-            <div className="ai-form-grid"><div className="ai-main-fields"><label className="field-label" htmlFor="ai-request">Testing request <span>*</span></label><textarea id="ai-request" maxLength={4000} rows={4} placeholder="What business behaviour should be checked? What could go wrong?" value={prompt} onChange={event => { setPrompt(event.target.value); setConsent(false) }} /><div className="input-count">{prompt.length} / 4,000</div><label className="field-label" htmlFor="ai-context">Application context <span>*</span></label><textarea id="ai-context" maxLength={60000} rows={9} placeholder={'Paste relevant requirements, known paths, test IDs, fixture rules, and independent expected values.\n\nExample: Login is /login. Revenue element uses data-testid="dashboard-revenue". Paid 150000 less refund 10000; cancelled orders are excluded.'} value={context} onChange={event => { setContext(event.target.value); setConsent(false) }} /><div className="input-count">{context.length.toLocaleString()} / 60,000</div></div>
+            <div className="ai-form-grid"><div className="ai-main-fields"><label className="field-label" htmlFor="ai-request">Testing request <span>*</span></label><textarea id="ai-request" maxLength={4000} rows={4} placeholder="What business behaviour should be checked? What could go wrong?" value={prompt} onChange={event => { setPrompt(event.target.value); setConsent(false) }} /><div className="input-count">{prompt.length} / 4,000</div><label className="field-label" htmlFor="ai-context">Application context <span className={snapshotIds.length ? 'optional' : undefined}>{snapshotIds.length ? 'optional with a snapshot' : '*'}</span></label><textarea id="ai-context" maxLength={60000} rows={9} placeholder={'Paste requirements, known paths, fixture rules, and independent expected values. Repository code alone may not reveal the intended business outcome.'} value={context} onChange={event => { setContext(event.target.value); setConsent(false) }} /><div className="input-count">{context.length.toLocaleString()} / 60,000</div></div>
               <div className="ai-settings"><div className="ai-settings-heading"><KeyRound size={17} /><strong>Generation settings</strong></div><label className="field-label" htmlFor="ai-model">Model</label><select id="ai-model" value={model} onChange={event => { setModel(event.target.value); setConsent(false) }}>{config.models.map(item => <option key={item} value={item}>{item}</option>)}</select><div className="field-label ai-access-label">Access mode</div><div className="ai-mode-options">{config.managed_available && <label className={credentialMode === 'managed' ? 'chosen' : ''}><input type="radio" name="credential-mode" value="managed" checked={credentialMode === 'managed'} onChange={() => { setCredentialMode('managed'); setConsent(false) }} /><span><strong>Managed</strong><small>Server configured key</small></span></label>}{config.byok_available && <label className={credentialMode === 'byok' ? 'chosen' : ''}><input type="radio" name="credential-mode" value="byok" checked={credentialMode === 'byok'} onChange={() => { setCredentialMode('byok'); setConsent(false) }} /><span><strong>Bring your own key</strong><small>For this request only</small></span></label>}</div>{credentialMode === 'byok' && <><label className="field-label" htmlFor="ai-provider-key">OpenAI API key</label><input id="ai-provider-key" type="password" autoComplete="off" placeholder="Enter key for this request" value={providerKey} onChange={event => setProviderKey(event.target.value)} /><p className="ai-key-note"><LockKeyhole size={13} />Cleared on submit. Never stored in browser storage.</p></>}</div></div>
-            <label className="ai-consent"><input type="checkbox" checked={consent} onChange={event => setConsent(event.target.checked)} /><span>I agree to send my testing request and app context above to OpenAI to generate proposals.</span></label>
+            <label className="ai-consent"><input type="checkbox" checked={consent} onChange={event => setConsent(event.target.checked)} /><span>{snapshotIds.length ? `I have reviewed the selected files and agree to send my testing request, application context, and ${snapshotIds.length} selected ${snapshotIds.length === 1 ? 'snapshot' : 'snapshots'} to OpenAI to generate proposals.` : 'I agree to send my testing request and application context to OpenAI to generate proposals.'}</span></label>
             {requestError && <div className="error-banner"><AlertCircle size={17} /><span>{requestError}</span></div>}
             <div className="ai-actions"><span><ShieldCheck size={16} />Drafts remain unapproved and unsaved until you review them.</span>{generating ? <button className="button button-danger" type="button" onClick={cancel}><Square size={14} />Cancel request</button> : <button className="button button-primary" type="submit" disabled={!canGenerate}><Sparkles size={16} />Generate proposals</button>}</div>
           </form>}

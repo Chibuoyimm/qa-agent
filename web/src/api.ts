@@ -134,6 +134,24 @@ export type AiProposalResponse = {
   scenarios: ScenarioInput[]
   questions: string[]
   assumptions: string[]
+  repository_snapshots?: RepositorySnapshotSummary[]
+}
+
+export type RepositoryRole = 'frontend' | 'backend'
+export type RepositorySnapshotSummary = {
+  id: string
+  project_id: string
+  repository: string
+  ref: string
+  role: RepositoryRole
+  commit_sha: string
+  content_sha256: string
+  file_count: number
+  total_bytes: number
+  created_at: string
+}
+export type RepositorySnapshot = RepositorySnapshotSummary & {
+  files: { path: string; content: string }[]
 }
 
 export function validateScenario(input: unknown): ScenarioInput {
