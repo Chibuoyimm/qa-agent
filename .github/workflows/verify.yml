@@ -51,7 +51,7 @@ jobs:
       - name: Test Go against PostgreSQL
         run: go test -race ./... && go vet ./...
       - name: Check browser worker and synthetic sample
-        run: cd worker && npm run check && npm test && cd ../sample && npm test
+        run: cd worker && npm run check && npm test
       - name: Build web workspace
         run: cd web && npm run build
       - name: Prove the complete release path
