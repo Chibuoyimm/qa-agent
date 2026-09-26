@@ -73,7 +73,8 @@ export function parseAllowedOrigins(value: string): Set<string> {
   const origins = value.split(',').map(s => s.trim()).filter(Boolean);
   if (!origins.length) throw new Error('QA_ALLOWED_ORIGINS is required');
   return new Set(origins.map(origin => {
-    const url = new URL(origin);
+    let url: URL;
+    try { url = new URL(origin); } catch { throw new Error('QA_ALLOWED_ORIGINS must contain exact HTTP(S) origins'); }
     if (!['http:', 'https:'].includes(url.protocol) || url.origin !== origin || url.pathname !== '/' || url.username || url.password || url.search || url.hash) {
       throw new Error('QA_ALLOWED_ORIGINS must contain exact HTTP(S) origins');
     }

@@ -1,4 +1,4 @@
-import { hostname } from 'node:os';
+import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import { chromium, type Browser } from 'playwright';
 import { parseAllowedOrigins, parseClaim, safePart, validateBaseUrl, type Claim, type ScenarioResult } from './contract.js';
@@ -14,14 +14,17 @@ function required(name: string): string {
   return value;
 }
 
-const api = new URL(required('QA_API_BASE_URL'));
+let api: URL;
+try { api = new URL(required('QA_API_BASE_URL')); }
+catch { throw new Error('QA_API_BASE_URL must be an HTTP(S) origin'); }
 if (!['http:', 'https:'].includes(api.protocol) || api.username || api.password || api.search || api.hash || api.pathname !== '/') {
   throw new Error('QA_API_BASE_URL must be an HTTP(S) origin');
 }
 const workerToken = required('QA_WORKER_TOKEN');
 const allowedOrigins = parseAllowedOrigins(required('QA_ALLOWED_ORIGINS'));
 const artifactRoot = resolve(required('QA_ARTIFACT_DIR'));
-const workerId = process.env.QA_WORKER_ID || `${hostname().slice(0, 40)}-${process.pid}`;
+const workerId = process.env.QA_WORKER_ID || `worker-${randomUUID()}`;
+if (!/^[A-Za-z0-9_-]{1,100}$/.test(workerId)) throw new Error('QA_WORKER_ID must be 1–100 simple characters');
 const shutdown = new AbortController();
 process.once('SIGINT', () => shutdown.abort());
 process.once('SIGTERM', () => shutdown.abort());

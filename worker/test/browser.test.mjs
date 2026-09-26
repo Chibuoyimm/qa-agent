@@ -20,6 +20,9 @@ let blockedBase;
 let blocked;
 let blockedHits = 0;
 let nestedHits = 0;
+let iframeHopHits = 0;
+let mutationPageHits = 0;
+let mutationHits = 0;
 const scenarios = JSON.parse(await readFile(new URL('../../sample/scenarios.json', import.meta.url), 'utf8'));
 
 async function listen(server) {
@@ -45,6 +48,19 @@ before(async () => {
     } else if (request.url === '/popup') {
       response.writeHead(200, { 'content-type': 'text/html' });
       response.end(`<button data-testid="open" onclick="window.open('${blockedBase}/')">Open</button><div data-testid="ready">ready</div>`);
+    } else if (request.url === '/iframe-host') {
+      response.writeHead(200, { 'content-type': 'text/html' });
+      response.end('<div data-testid="ready">ready</div><iframe src="/iframe-hop"></iframe>');
+    } else if (request.url === '/iframe-hop') {
+      iframeHopHits++;
+      response.writeHead(302, { location: `${blockedBase}/` }); response.end();
+    } else if (request.url === '/mutation-form') {
+      mutationPageHits++;
+      response.writeHead(200, { 'content-type': 'text/html' });
+      response.end('<form method="post" action="/mutate"><button data-testid="change">Change</button></form>');
+    } else if (request.url === '/mutate') {
+      mutationHits++;
+      response.writeHead(200, { 'content-type': 'text/html' }); response.end('<div data-testid="changed">Changed</div>');
     } else if (request.url === '/start') {
       response.writeHead(302, { location: '/nested/page' }); response.end();
     } else if (request.url === '/nested/page') {
@@ -130,6 +146,30 @@ test('popup attempts are rejected before reaching another origin', async () => {
   const scenario = { id: 'popup', steps: [{ action: 'navigate', path: '/popup' }, { action: 'click', test_id: 'open' }, { action: 'assert_visible', test_id: 'ready' }] };
   const result = await executeScenario(browser, { id: 'popup', base_url: `${externalBase}/` }, scenario, new Set([externalBase]), artifacts, new AbortController().signal);
   assert.equal(result.status, 'error');
-  assert.match(result.message, /popup/);
+  assert.match(result.message, /popup|allowlist/);
   assert.equal(blockedHits, 0);
+});
+
+test('iframe redirects cannot bypass the page CDP session', async () => {
+  const scenario = { id: 'iframe', steps: [{ action: 'navigate', path: '/iframe-host' }, { action: 'assert_visible', test_id: 'ready' }] };
+  const result = await executeScenario(browser, { id: 'iframe', base_url: `${externalBase}/` }, scenario, new Set([externalBase]), artifacts, new AbortController().signal);
+  assert.equal(result.status, 'error');
+  assert.match(result.message, /iframe/);
+  assert.equal(iframeHopHits, 0, 'iframe first request must be blocked');
+  assert.equal(blockedHits, 0, 'redirect destination must receive no request');
+});
+
+test('missing secret preflight prevents earlier state-changing steps', async () => {
+  delete process.env.QA_TEST_MISSING_AFTER_CLICK;
+  const scenario = { id: 'preflight', steps: [
+    { action: 'navigate', path: '/mutation-form' },
+    { action: 'click', test_id: 'change' },
+    { action: 'fill', test_id: 'never-reached', secret_env: 'QA_TEST_MISSING_AFTER_CLICK' },
+    { action: 'assert_visible', test_id: 'changed' },
+  ] };
+  const result = await executeScenario(browser, { id: 'preflight', base_url: `${externalBase}/` }, scenario, new Set([externalBase]), artifacts, new AbortController().signal);
+  assert.equal(result.status, 'blocked');
+  assert.equal(mutationPageHits, 0);
+  assert.equal(mutationHits, 0);
+  assert.deepEqual(result.artifacts, []);
 });

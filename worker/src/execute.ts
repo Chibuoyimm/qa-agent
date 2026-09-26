@@ -75,6 +75,9 @@ export async function executeScenario(browser: Browser, run: Run, scenario: Scen
   const started = Date.now();
   const artifacts: Artifact[] = [];
   const base = validateBaseUrl(run.base_url, allowedOrigins);
+  if (scenario.steps.some(step => step.secret_env && !process.env[step.secret_env])) {
+    return { scenario_id: scenario.id, status: 'blocked', message: 'A referenced QA_TEST_ secret is unavailable', duration_ms: Date.now() - started, artifacts };
+  }
   const directory = join(artifactRoot, safePart(run.id), safePart(scenario.id));
   await mkdir(directory, { recursive: true });
   let context: BrowserContext | undefined;
@@ -84,6 +87,7 @@ export async function executeScenario(browser: Browser, run: Run, scenario: Scen
   let forbidden = false;
   let unsupportedSocket = false;
   let popupAttempt = false;
+  let unsupportedFrame = false;
   const timeout = AbortSignal.timeout(SCENARIO_TIMEOUT_MS);
   const combined = AbortSignal.any([signal, timeout]);
   const stop = () => { void page?.close().catch(() => {}); };
@@ -108,11 +112,23 @@ export async function executeScenario(browser: Browser, run: Run, scenario: Scen
       }
     });
     await context.route('**/*', async route => {
-      // The CDP session below covers the scenario page. Playwright's context route
-      // prevents another page from sending even its first request.
+      // CDP covers the main page and native redirects. Keep a context-level guard
+      // for direct off-origin requests and targets outside that CDP session.
+      if (!isAllowedRequest(route.request().url(), allowedOrigins)) {
+        forbidden = true;
+        await route.abort('blockedbyclient').catch(() => {});
+        return;
+      }
       try {
-        if (route.request().frame().page() !== mainPage) {
+        const frame = route.request().frame();
+        if (frame.page() !== mainPage) {
           popupAttempt = true;
+          await route.abort('blockedbyclient');
+          return;
+        }
+        if (frame !== mainPage.mainFrame()) {
+          // A page CDP session need not cover a cross-process iframe's redirects.
+          unsupportedFrame = true;
           await route.abort('blockedbyclient');
           return;
         }
@@ -143,6 +159,7 @@ export async function executeScenario(browser: Browser, run: Run, scenario: Scen
     if (forbidden) throw new ForbiddenRequest('Target attempted a request outside allowed origins');
     if (unsupportedSocket) throw new Error('Unsupported WebSocket');
     if (popupAttempt) throw new Error('Popup unsupported');
+    if (unsupportedFrame) throw new Error('Iframe unsupported');
   } catch (error) {
     if (forbidden || error instanceof ForbiddenRequest) {
       status = 'error'; message = 'Target requested an origin outside the worker allowlist';
@@ -152,6 +169,8 @@ export async function executeScenario(browser: Browser, run: Run, scenario: Scen
       status = 'error'; message = 'Target attempted a WebSocket connection, unsupported in this pilot';
     } else if (popupAttempt) {
       status = 'error'; message = 'Target attempted a popup, unsupported in this pilot';
+    } else if (unsupportedFrame) {
+      status = 'error'; message = 'Target attempted an iframe request, unsupported in this pilot';
     } else if (error instanceof AssertionFailure) {
       status = 'failed'; message = error.message;
     } else {
