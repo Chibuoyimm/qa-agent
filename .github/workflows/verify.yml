@@ -69,3 +69,4 @@ jobs:
             artifacts/integration-*/release-*.json
             artifacts/integration-*/release-desktop.png
             artifacts/integration-*/release-mobile.png
+            artifacts/integration-*/chatgpt-subscription-*.png

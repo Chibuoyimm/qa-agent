@@ -7,6 +7,7 @@ import { randomBytes, createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile, open } from 'node:fs/promises';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { verifyChatGPTUI } from './chatgpt-ui-proof.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const key = `${Date.now()}-${randomBytes(3).toString('hex')}`;
@@ -79,7 +80,7 @@ try {
     QA_API_TOKEN: apiToken, QA_WORKER_TOKEN: workerToken, QA_LISTEN_ADDR: `127.0.0.1:${apiPort}`,
     QA_API_BASE_URL: base, QA_ALLOWED_ORIGINS: `${goodURL},${badURL}`, QA_ARTIFACT_DIR: resolve(evidence, 'browser'),
     QA_TEST_EMAIL: 'demo@example.test', QA_TEST_PASSWORD: 'pass1234', QA_WORKER_ID: 'integration-worker',
-    QA_OPENAI_MODELS: '', QA_OPENAI_API_KEY: '',
+    QA_OPENAI_MODELS: '', QA_OPENAI_API_KEY: '', QA_CHATGPT_ENABLED: 'false',
   };
   let server = await start('api', resolve(evidence, 'server'), [], env);
   const good = await start('sample-healthy', process.execPath, ['sample/server.js'], { ...env, PORT: String(goodPort), QA_SAMPLE_DEFECT: '0' });
@@ -394,6 +395,7 @@ try {
     const saved = await api(`/api/projects/${healthy.project.id}/scenarios`);
     assert.equal(saved.find(s => s.name === proposal.name)?.approved, true);
     observations.push({ name: 'AI draft review and approval UI (simulated generation, real persistence)', status: 'passed' });
+    observations.push(await verifyChatGPTUI(page, api, healthy.project.id, templates[0], evidence));
     assert.deepEqual(errors, [], 'AI proposal flow must not throw browser errors');
     assert.equal(await page.evaluate(() => localStorage.length + sessionStorage.length), 0, 'Operator token must not enter browser storage');
     await page.reload();

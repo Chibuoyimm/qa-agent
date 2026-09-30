@@ -145,11 +145,33 @@ export type AiConfig = {
   models: string[]
   managed_available: boolean
   byok_available: boolean
+  chatgpt?: ChatGptStatus
 }
+
+export type ChatGptProfile = {
+  id: string
+  email: string
+  label: string
+  connected: boolean
+  sharing: boolean
+}
+
+export type ChatGptStatus = {
+  enabled: boolean
+  active_profile_id: string
+  profiles: ChatGptProfile[]
+  login?: { id: string; status: string; message: string }
+  message?: string
+}
+
+export type ChatGptModel = { slug: string; display_name: string }
+export type ChatGptLogin = { id: string; auth_url: string; expires_at: string }
 
 export type AiProposalResponse = {
   provider: 'openai'
   model: string
+  credential_mode?: string
+  chatgpt_profile_id?: string
   context_sha256: string
   scenarios: ScenarioInput[]
   questions: string[]

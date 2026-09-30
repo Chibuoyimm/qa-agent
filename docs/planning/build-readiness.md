@@ -11,14 +11,14 @@ Planning checkpoint, 26 September 2026. This document does not authorise applica
 - Manage application test accounts, roles, sessions, and secrets.
 - Use Go for the backend and TypeScript/Playwright for browser workers; the user accepted this split.
 - Include managed AI, model choice, and customer API-key connections. Managed AI and BYOK share the first provider adapter; packaging and price remain proposals.
-- Retain OpenAI subscription access through Codex as a planned, separately validated integration. Google and Claude consumer subscription connections are excluded from the recommended launch scope pending explicit permission for the exact offering.
+- Use the documented Sign in with ChatGPT route for OpenAI subscription access in the local pilot, and validate it with a real eligible account. Commercial hosted availability remains dependent on OpenAI partner access. Google and Claude consumer subscription connections are excluded from the recommended launch scope pending explicit permission for the exact offering.
 
 **Defaults accepted by the user, 26 September 2026**
 
 - Let the agent explore and modify designated test data within configured permissions. Ask focused questions about material business-rule ambiguities and keep required pipeline assertions fixed during a run.
 - Begin pipeline execution in advisory mode, then enable blocking for approved critical scenarios after establishing reliability.
 - Use the Go backend and TypeScript/Playwright worker split described above.
-- Share the first provider adapter between managed AI and BYOK. Prototype OpenAI subscription integration separately and decide whether launch must wait for it after validating that route.
+- Share the first provider adapter between managed AI and BYOK. Implement local ChatGPT plan usage separately from API-key credentials; decide hosted launch timing after validating account admission and partner availability.
 - Optimise repository analysis for the first pilot application's stack and communicate limits for other frameworks.
 - Establish whether the pilot permits its code and screenshots to reach the selected provider, plus any hosting-region and retention requirements. Acceptance of this process is not the pilot's actual data-processing consent or a choice of region/retention period.
 - Use pipethedev's Go cleanup guide as the Go implementation and review standard. See [development instructions](AGENTS.md), the [unchanged source](references/pipethedev-go-deslop.md), and [pinned provenance](references/pipethedev-go-deslop.source.json).
@@ -45,7 +45,7 @@ These answers determine the first implementation sequence and deployment assumpt
 | Test ownership | Existing suites and exported tests change lifecycle design | Inspect/reuse existing tests where useful; retain versioned scenarios; export portability can follow the core proof |
 | Data handling | Code/screenshots may leave the customer's environment | Explicit provider choice, synthetic test data, private evidence, short configurable retention; establish any pilot residency restrictions before processing |
 | Pipeline enforcement | A noisy early suite can disrupt releases | Run advisory while establishing reliability, then explicitly enable blocking for approved critical scenarios |
-| Subscription launch timing | Native-runtime support can expand scope | Prototype Codex independently; decide whether launch must wait for it after feasibility results |
+| Subscription launch timing | Native-runtime support can expand scope | Validate Sign in with ChatGPT independently; hosted launch depends on partner access |
 
 The accepted defaults above are user decisions. Other starting positions in this table remain proposals, and pilot-specific permissions, authentication, data preparation, and hosting constraints remain unresolved. Missing answers do not prevent further design, but must be resolved before work that depends on them.
 
