@@ -195,17 +195,21 @@ type responseText struct {
 }
 
 type providerResponse struct {
-	Status string `json:"status"`
-	Output []struct {
+	ID     string               `json:"id"`
+	Status string               `json:"status"`
+	Output []providerOutputItem `json:"output"`
+}
+
+type providerOutputItem struct {
+	ID      string `json:"id"`
+	Type    string `json:"type"`
+	Role    string `json:"role"`
+	Status  string `json:"status"`
+	Content []struct {
 		Type    string `json:"type"`
-		Role    string `json:"role"`
-		Status  string `json:"status"`
-		Content []struct {
-			Type    string `json:"type"`
-			Text    string `json:"text"`
-			Refusal string `json:"refusal"`
-		} `json:"content"`
-	} `json:"output"`
+		Text    string `json:"text"`
+		Refusal string `json:"refusal"`
+	} `json:"content"`
 }
 
 type proposalOutput struct {

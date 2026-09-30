@@ -58,6 +58,75 @@ func TestSubscriptionStreamBoundaries(t *testing.T) {
 	}
 }
 
+func leanSubscriptionEvents(t *testing.T) (string, string, string) {
+	t.Helper()
+	response := providerReply("completed", validOutput)
+	var full providerResponse
+	if err := json.NewDecoder(response.Body).Decode(&full); err != nil {
+		t.Fatal(err)
+	}
+	full.Output[0].ID = "message_fixture"
+	item, err := json.Marshal(full.Output[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := `data: {"type":"response.created","response":{"id":"response_fixture","status":"in_progress"}}` + "\n\n"
+	done := `data: {"type":"response.output_item.done","output_index":0,"item":` + string(item) + "}\n\n"
+	completed := `data: {"type":"response.completed","response":{"id":"response_fixture","status":"completed","output":[]}}` + "\n\n"
+	return created, done, completed
+}
+
+func TestSubscriptionStreamCollectsFinishedItemsBeforeCompletion(t *testing.T) {
+	created, done, completed := leanSubscriptionEvents(t)
+	for _, tc := range []struct {
+		name, body string
+		want       error
+	}{
+		{"lean completed response", created + done + completed, nil},
+		{"item without terminal event", created + done, ErrUpstream},
+		{"empty terminal without item", created + completed, ErrUpstream},
+		{"missing response identity", done + completed, ErrUpstream},
+		{"wrong response identity", created + done + strings.Replace(completed, "response_fixture", "other_response", 1), ErrUpstream},
+		{"duplicate item", created + done + done + completed, ErrUpstream},
+		{"missing output index", created + strings.Replace(done, `"output_index":0,`, "", 1) + completed, ErrUpstream},
+		{"skipped output index", created + strings.Replace(done, `"output_index":0`, `"output_index":1`, 1) + completed, ErrUpstream},
+		{"unknown output type", created + strings.Replace(done, `"type":"message"`, `"type":"function_call"`, 1) + completed, ErrUpstream},
+		{"mismatched terminal items", created + done + completedEvent(t), ErrUpstream},
+		{"quota after finished item", created + done + `data: {"type":"response.failed","response":{"error":{"code":"subscription_sharing_usage_limit_exceeded"}}}` + "\n\n", chatgpt.ErrUsageLimit},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := readSubscriptionStream(strings.NewReader(tc.body))
+			if tc.want == nil {
+				if err != nil || result.Status != "completed" || len(result.Output) != 1 || result.Output[0].Content[0].Text != validOutput {
+					t.Fatalf("result %+v error %v", result, err)
+				}
+			} else if !errors.Is(err, tc.want) {
+				t.Fatalf("wanted %v got %v", tc.want, err)
+			}
+		})
+	}
+}
+
+func TestSubscriptionAcceptsMissingContentTypeOnlyForValidStream(t *testing.T) {
+	created, done, completed := leanSubscriptionEvents(t)
+	for _, body := range []string{created + done + completed, `{"status":"completed"}`, created + done} {
+		p, err := New("", "", roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
+		}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := p.streamSubscription(context.Background(), validInput("chatgpt"), "subscription-token")
+		if body == created+done+completed {
+			if err != nil || len(result.Output) != 1 {
+				t.Fatalf("result %+v error %v", result, err)
+			}
+		} else if !errors.Is(err, ErrUpstream) {
+			t.Fatalf("invalid stream accepted: %v", err)
+		}
+	}
+}
+
 func TestSubscriptionWireContract(t *testing.T) {
 	calls := 0
 	p, err := New("", "", roundTripFunc(func(req *http.Request) (*http.Response, error) {
@@ -190,7 +259,10 @@ func subscriptionFixture(t *testing.T) (*chatgpt.Client, http.RoundTripper) {
 			if req.Header.Get("Authorization") != "Bearer subscription-token" {
 				t.Fatal("proposal did not use the selected subscription")
 			}
-			return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(completedEvent(t)))}, nil
+			created, done, completed := leanSubscriptionEvents(t)
+			reasoning := `data: {"type":"response.output_item.done","output_index":0,"item":{"id":"reasoning_fixture","type":"reasoning","content":[]}}` + "\n\n"
+			done = strings.Replace(done, `"output_index":0`, `"output_index":1`, 1)
+			return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(created + reasoning + done + completed))}, nil
 		case "https://auth.openai.com/.well-known/openid-configuration":
 			return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"issuer":"https://auth.openai.com","revocation_endpoint":"https://auth.openai.com/revoke"}`))}, nil
 		case "https://auth.openai.com/revoke":

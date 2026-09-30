@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 
 	"github.com/Chibuoyimm/qa-agent/internal/chatgpt"
@@ -87,7 +88,7 @@ func (p *Planner) streamSubscription(ctx context.Context, in Input, key string) 
 		_ = json.Unmarshal(data, &failure)
 		return providerResponse{}, subscriptionFailure(failure.Error.Code, response.StatusCode)
 	}
-	if strings.Split(response.Header.Get("Content-Type"), ";")[0] != "text/event-stream" {
+	if contentType := strings.Split(response.Header.Get("Content-Type"), ";")[0]; contentType != "" && contentType != "text/event-stream" {
 		return providerResponse{}, ErrUpstream
 	}
 	return readSubscriptionStream(response.Body)
@@ -126,15 +127,19 @@ func readSubscriptionStream(body io.Reader) (providerResponse, error) {
 	scanner.Buffer(make([]byte, 4096), 2<<20)
 	var data strings.Builder
 	eventName := ""
+	responseID := ""
+	var items []providerOutputItem
 	consume := func() (providerResponse, bool, error) {
 		if data.Len() == 0 {
 			eventName = ""
 			return providerResponse{}, false, nil
 		}
 		var event struct {
-			Type  string `json:"type"`
-			Code  string `json:"code"`
-			Error struct {
+			Type        string             `json:"type"`
+			Code        string             `json:"code"`
+			OutputIndex *int               `json:"output_index"`
+			Item        providerOutputItem `json:"item"`
+			Error       struct {
 				Code string `json:"code"`
 			} `json:"error"`
 			Response struct {
@@ -150,8 +155,33 @@ func readSubscriptionStream(body io.Reader) (providerResponse, error) {
 		data.Reset()
 		eventName = ""
 		switch event.Type {
+		case "response.created":
+			if responseID != "" || len(items) != 0 {
+				return providerResponse{}, false, ErrUpstream
+			}
+			responseID = event.Response.ID
+		case "response.output_item.done":
+			if event.OutputIndex == nil || *event.OutputIndex != len(items) || len(items) >= 16 || event.Item.ID == "" || (event.Item.Type != "message" && event.Item.Type != "reasoning") {
+				return providerResponse{}, false, ErrUpstream
+			}
+			for _, item := range items {
+				if item.ID == event.Item.ID {
+					return providerResponse{}, false, ErrUpstream
+				}
+			}
+			items = append(items, event.Item)
 		case "response.completed":
-			if event.Response.Status != "completed" {
+			if event.Response.Status != "completed" || (responseID != "" && event.Response.ID != responseID) {
+				return providerResponse{}, false, ErrUpstream
+			}
+			if len(event.Response.Output) == 0 {
+				// The plan route can leave terminal output empty. Only finished
+				// items from this response may supply it; deltas never do.
+				if responseID == "" || len(items) == 0 {
+					return providerResponse{}, false, ErrUpstream
+				}
+				event.Response.Output = items
+			} else if len(items) > 0 && !reflect.DeepEqual(items, event.Response.Output) {
 				return providerResponse{}, false, ErrUpstream
 			}
 			return event.Response.providerResponse, true, nil
