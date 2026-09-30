@@ -298,7 +298,7 @@ func TestHTTPBoundary(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"status":"completed","output":[{"type":"message","status":"completed","content":[{"type":"output_text","text":` + string(encoded) + `}]}]}`))}, nil
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"status":"completed","output":[{"type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":` + string(encoded) + `}]}]}`))}, nil
 	})
 	workingPlanner, err := planner.New("test-model", "", provider)
 	if err != nil {

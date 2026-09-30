@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Chibuoyimm/qa-agent/internal/chatgpt"
 	"github.com/Chibuoyimm/qa-agent/internal/planner"
 	"github.com/Chibuoyimm/qa-agent/internal/qa"
 	"github.com/Chibuoyimm/qa-agent/internal/repository"
@@ -53,6 +54,12 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("POST /api/worker/runs/{id}/heartbeat", a.authorize(a.workerToken, a.heartbeat))
 	mux.Handle("POST /api/worker/runs/{id}/complete", a.authorize(a.workerToken, a.completeRun))
 	mux.Handle("GET /api/ai/config", a.authorize(a.apiToken, a.aiConfig))
+	mux.Handle("GET /api/ai/chatgpt", a.authorize(a.apiToken, a.chatGPTStatus))
+	mux.Handle("POST /api/ai/chatgpt/login", a.authorize(a.apiToken, a.chatGPTLogin))
+	mux.Handle("POST /api/ai/chatgpt/login/cancel", a.authorize(a.apiToken, a.chatGPTCancelLogin))
+	mux.Handle("POST /api/ai/chatgpt/select", a.authorize(a.apiToken, a.chatGPTSelect))
+	mux.Handle("POST /api/ai/chatgpt/disconnect", a.authorize(a.apiToken, a.chatGPTDisconnect))
+	mux.Handle("GET /api/ai/chatgpt/models", a.authorize(a.apiToken, a.chatGPTModels))
 	mux.Handle("POST /api/projects/{id}/proposals", a.authorize(a.apiToken, a.propose))
 	mux.Handle("POST /api/projects/{id}/repositories/sync", a.authorize(a.apiToken, a.syncRepository))
 	mux.Handle("GET /api/projects/{id}/repositories", a.authorize(a.apiToken, a.listRepositories))
@@ -130,6 +137,24 @@ func (a *API) fail(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, "record not found")
 	case errors.Is(err, qa.ErrConflict):
 		writeError(w, http.StatusConflict, "invalid state or lease")
+	case errors.Is(err, chatgpt.ErrInvalid):
+		writeError(w, http.StatusBadRequest, "invalid ChatGPT account or model selection")
+	case errors.Is(err, chatgpt.ErrReconnect):
+		writeError(w, http.StatusConflict, "Reconnect your ChatGPT account to use your plan")
+	case errors.Is(err, chatgpt.ErrUsageLimit):
+		writeError(w, http.StatusTooManyRequests, "ChatGPT plan usage is unavailable or has reached its limit. Manage usage in ChatGPT settings")
+	case errors.Is(err, chatgpt.ErrUnavailable):
+		writeError(w, http.StatusServiceUnavailable, "ChatGPT plan access is not enabled on this local server")
+	case errors.Is(err, chatgpt.ErrBusy):
+		writeError(w, http.StatusConflict, "A ChatGPT sign-in is already in progress")
+	case errors.Is(err, chatgpt.ErrUpstream):
+		writeError(w, http.StatusBadGateway, "ChatGPT connection failed. Try reconnecting or retrying later")
+	case errors.Is(err, planner.ErrSubscriptionDenied):
+		writeError(w, http.StatusForbidden, "ChatGPT plan access is unavailable for this account, workspace, or integration")
+	case errors.Is(err, planner.ErrSubscriptionUnavailable):
+		writeError(w, http.StatusServiceUnavailable, "ChatGPT plan availability could not be checked. Try again later")
+	case errors.Is(err, planner.ErrSubscriptionCapability):
+		writeError(w, http.StatusBadGateway, "ChatGPT plan requests do not support this proposal configuration")
 	case errors.Is(err, planner.ErrInvalid):
 		writeError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, planner.ErrUnavailable):

@@ -26,7 +26,7 @@ func providerReply(status, text string) *http.Response {
 		Type string `json:"type"`
 		Text string `json:"text"`
 	}{Type: "output_text", Text: text})
-	return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"status":"` + status + `","output":[{"type":"message","status":"completed","content":[` + string(content) + `]}]}`))}
+	return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"status":"` + status + `","output":[{"type":"message","role":"assistant","status":"completed","content":[` + string(content) + `]}]}`))}
 }
 
 const validOutput = `{"scenarios":[{"name":"Revenue","description":"Check net","expected_outcome":"Net is 140000","approved":true,"steps":[{"action":"assert_text","path":null,"test_id":"revenue","value":"140000","secret_env":null}]}],"questions":[],"assumptions":[]}`

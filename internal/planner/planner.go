@@ -14,17 +14,21 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Chibuoyimm/qa-agent/internal/chatgpt"
 	"github.com/Chibuoyimm/qa-agent/internal/qa"
 )
 
 const endpoint = "https://api.openai.com/v1/responses"
 
 var (
-	ErrInvalid     = errors.New("invalid proposal request")
-	ErrUnavailable = errors.New("proposal access is not configured")
-	ErrBusy        = errors.New("proposal generation is busy")
-	ErrUpstream    = errors.New("proposal provider failed or returned invalid output")
-	ErrTimeout     = errors.New("proposal provider timed out")
+	ErrInvalid                 = errors.New("invalid proposal request")
+	ErrUnavailable             = errors.New("proposal access is not configured")
+	ErrBusy                    = errors.New("proposal generation is busy")
+	ErrUpstream                = errors.New("proposal provider failed or returned invalid output")
+	ErrTimeout                 = errors.New("proposal provider timed out")
+	ErrSubscriptionDenied      = errors.New("ChatGPT plan access denied")
+	ErrSubscriptionUnavailable = errors.New("ChatGPT plan availability could not be checked")
+	ErrSubscriptionCapability  = errors.New("ChatGPT plan request capability is unsupported")
 )
 
 //go:embed schema.json
@@ -35,19 +39,23 @@ type Input struct {
 	Context               string   `json:"context"`
 	Model                 string   `json:"model"`
 	CredentialMode        string   `json:"credential_mode"`
+	ChatGPTProfileID      string   `json:"chatgpt_profile_id,omitempty"`
 	Consent               bool     `json:"consent"`
 	RepositorySnapshotIDs []string `json:"repository_snapshot_ids,omitempty"`
 	DiscoveryID           string   `json:"discovery_id,omitempty"`
 }
 
 type Config struct {
-	Provider         string   `json:"provider"`
-	Models           []string `json:"models"`
-	ManagedAvailable bool     `json:"managed_available"`
-	BYOKAvailable    bool     `json:"byok_available"`
+	ChatGPT          *chatgpt.Status `json:"chatgpt,omitempty"`
+	Provider         string          `json:"provider"`
+	Models           []string        `json:"models"`
+	ManagedAvailable bool            `json:"managed_available"`
+	BYOKAvailable    bool            `json:"byok_available"`
 }
 
 type Result struct {
+	CredentialMode      string                 `json:"credential_mode"`
+	ChatGPTProfileID    string                 `json:"chatgpt_profile_id,omitempty"`
 	Provider            string                 `json:"provider"`
 	Model               string                 `json:"model"`
 	ContextSHA256       string                 `json:"context_sha256"`
@@ -59,6 +67,7 @@ type Result struct {
 }
 
 type Planner struct {
+	ChatGPT    *chatgpt.Client
 	models     []string
 	managedKey string
 	client     *http.Client
@@ -104,7 +113,12 @@ func New(modelsRaw, managedKey string, transport http.RoundTripper) (*Planner, e
 }
 
 func (p *Planner) Config() Config {
-	return Config{Provider: "openai", Models: append([]string{}, p.models...), ManagedAvailable: len(p.models) > 0 && p.managedKey != "", BYOKAvailable: len(p.models) > 0}
+	cfg := Config{Provider: "openai", Models: append([]string{}, p.models...), ManagedAvailable: len(p.models) > 0 && p.managedKey != "", BYOKAvailable: len(p.models) > 0}
+	if p.ChatGPT != nil {
+		status := p.ChatGPT.Status()
+		cfg.ChatGPT = &status
+	}
+	return cfg
 }
 
 func (p *Planner) Validate(in Input, byokKey string) error {
@@ -121,6 +135,18 @@ func (p *Planner) Validate(in Input, byokKey string) error {
 			return fmt.Errorf("%w: repository_snapshot_ids must be nonempty and unique", ErrInvalid)
 		}
 		seenIDs[id] = true
+	}
+	if in.CredentialMode == "chatgpt" {
+		if p.ChatGPT == nil {
+			return ErrUnavailable
+		}
+		if in.ChatGPTProfileID == "" || in.Model == "" || len(in.Model) > 100 || strings.ContainsAny(in.Model, " \t\r\n") || byokKey != "" {
+			return fmt.Errorf("%w: select a ChatGPT account and model without an API key", ErrInvalid)
+		}
+		return nil
+	}
+	if in.ChatGPTProfileID != "" {
+		return fmt.Errorf("%w: ChatGPT account requires ChatGPT plan access", ErrInvalid)
 	}
 	if len(p.models) == 0 {
 		return ErrUnavailable
@@ -151,25 +177,28 @@ func (p *Planner) Validate(in Input, byokKey string) error {
 }
 
 type providerRequest struct {
-	Model           string `json:"model"`
-	Instructions    string `json:"instructions"`
-	Input           string `json:"input"`
-	Store           bool   `json:"store"`
-	MaxOutputTokens int    `json:"max_output_tokens"`
-	Text            struct {
-		Format struct {
-			Type   string          `json:"type"`
-			Name   string          `json:"name"`
-			Strict bool            `json:"strict"`
-			Schema json.RawMessage `json:"schema"`
-		} `json:"format"`
-	} `json:"text"`
+	Model           string       `json:"model"`
+	Instructions    string       `json:"instructions"`
+	Input           string       `json:"input"`
+	Store           bool         `json:"store"`
+	MaxOutputTokens int          `json:"max_output_tokens"`
+	Text            responseText `json:"text"`
+}
+
+type responseText struct {
+	Format struct {
+		Type   string          `json:"type"`
+		Name   string          `json:"name"`
+		Strict bool            `json:"strict"`
+		Schema json.RawMessage `json:"schema"`
+	} `json:"format"`
 }
 
 type providerResponse struct {
 	Status string `json:"status"`
 	Output []struct {
 		Type    string `json:"type"`
+		Role    string `json:"role"`
 		Status  string `json:"status"`
 		Content []struct {
 			Type    string `json:"type"`
@@ -200,73 +229,41 @@ func (p *Planner) Propose(ctx context.Context, in Input, byokKey string) (Result
 	default:
 		return Result{}, ErrBusy
 	}
-	key := p.managedKey
-	if in.CredentialMode == "byok" {
-		key = byokKey
-	}
 	providerCtx, cancel := context.WithTimeout(ctx, p.deadline)
 	defer cancel()
-	request := providerRequest{Model: in.Model, Instructions: instructions,
-		Input: "Testing request:\n" + in.Prompt + "\n\nApplication context:\n" + in.Context,
-		Store: false, MaxOutputTokens: 6000}
-	request.Text.Format.Type = "json_schema"
-	request.Text.Format.Name = "qa_scenario_proposals"
-	request.Text.Format.Strict = true
-	request.Text.Format.Schema = p.schema
-	body, err := json.Marshal(request)
-	if err != nil {
-		return Result{}, ErrUpstream
-	}
-	httpRequest, err := http.NewRequestWithContext(providerCtx, http.MethodPost, endpoint, bytes.NewReader(body))
-	if err != nil {
-		return Result{}, ErrUpstream
-	}
-	httpRequest.Header.Set("Authorization", "Bearer "+key)
-	httpRequest.Header.Set("Content-Type", "application/json")
-	response, err := p.client.Do(httpRequest)
-	if err != nil {
-		if errors.Is(providerCtx.Err(), context.DeadlineExceeded) {
-			return Result{}, ErrTimeout
-		}
-		if ctx.Err() != nil {
-			return Result{}, ctx.Err()
-		}
-		return Result{}, ErrUpstream
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return Result{}, ErrUpstream
-	}
-	data, err := io.ReadAll(io.LimitReader(response.Body, (2<<20)+1))
-	if err != nil {
-		if errors.Is(providerCtx.Err(), context.DeadlineExceeded) {
-			return Result{}, ErrTimeout
-		}
-		if ctx.Err() != nil {
-			return Result{}, ctx.Err()
-		}
-		return Result{}, ErrUpstream
-	}
-	if len(data) > 2<<20 {
-		return Result{}, ErrUpstream
-	}
 	var provider providerResponse
-	if err := json.Unmarshal(data, &provider); err != nil || provider.Status != "completed" {
-		return Result{}, ErrUpstream
+	var err error
+	if in.CredentialMode == "chatgpt" {
+		provider, err = p.subscriptionResponse(providerCtx, in)
+	} else {
+		key := p.managedKey
+		if in.CredentialMode == "byok" {
+			key = byokKey
+		}
+		provider, err = p.apiResponse(providerCtx, in, key)
+	}
+	if err != nil {
+		if errors.Is(providerCtx.Err(), context.DeadlineExceeded) {
+			return Result{}, ErrTimeout
+		}
+		if ctx.Err() != nil {
+			return Result{}, ctx.Err()
+		}
+		return Result{}, err
 	}
 	var outputText string
 	for _, item := range provider.Output {
 		if item.Type == "reasoning" {
 			continue
 		}
-		if item.Type != "message" {
+		if item.Type != "message" || item.Role != "assistant" || len(item.Content) != 1 {
 			return Result{}, ErrUpstream
 		}
-		if item.Status != "" && item.Status != "completed" {
+		if item.Status != "completed" {
 			return Result{}, ErrUpstream
 		}
 		for _, content := range item.Content {
-			if content.Type == "refusal" || content.Refusal != "" {
+			if content.Type != "output_text" || content.Refusal != "" || content.Text == "" {
 				return Result{}, ErrUpstream
 			}
 			if content.Type == "output_text" {
@@ -311,5 +308,42 @@ func (p *Planner) Propose(ctx context.Context, in Input, byokKey string) (Result
 		}
 	}
 	hash := sha256.Sum256([]byte(in.Context))
-	return Result{Provider: "openai", Model: in.Model, ContextSHA256: hex.EncodeToString(hash[:]), Scenarios: proposed.Scenarios, Questions: proposed.Questions, Assumptions: proposed.Assumptions, RepositorySnapshots: []qa.RepositorySummary{}}, nil
+	return Result{CredentialMode: in.CredentialMode, ChatGPTProfileID: in.ChatGPTProfileID, Provider: "openai", Model: in.Model, ContextSHA256: hex.EncodeToString(hash[:]), Scenarios: proposed.Scenarios, Questions: proposed.Questions, Assumptions: proposed.Assumptions, RepositorySnapshots: []qa.RepositorySummary{}}, nil
+}
+
+func (p *Planner) apiResponse(ctx context.Context, in Input, key string) (providerResponse, error) {
+	request := providerRequest{Model: in.Model, Instructions: instructions,
+		Input: "Testing request:\n" + in.Prompt + "\n\nApplication context:\n" + in.Context,
+		Store: false, MaxOutputTokens: 6000}
+	request.Text.Format.Type = "json_schema"
+	request.Text.Format.Name = "qa_scenario_proposals"
+	request.Text.Format.Strict = true
+	request.Text.Format.Schema = p.schema
+	body, err := json.Marshal(request)
+	if err != nil {
+		return providerResponse{}, ErrUpstream
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return providerResponse{}, ErrUpstream
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("Content-Type", "application/json")
+	response, err := p.client.Do(req)
+	if err != nil {
+		return providerResponse{}, ErrUpstream
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return providerResponse{}, ErrUpstream
+	}
+	data, err := io.ReadAll(io.LimitReader(response.Body, (2<<20)+1))
+	if err != nil || len(data) > 2<<20 {
+		return providerResponse{}, ErrUpstream
+	}
+	var provider providerResponse
+	if err := json.Unmarshal(data, &provider); err != nil || provider.Status != "completed" {
+		return providerResponse{}, ErrUpstream
+	}
+	return provider, nil
 }
