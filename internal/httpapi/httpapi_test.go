@@ -381,7 +381,7 @@ func TestHTTPBoundary(t *testing.T) {
 	}
 	baseURL = server.URL
 	t.Cleanup(func() {
-		for _, query := range []string{`DELETE FROM runs WHERE project_id=$1`, `DELETE FROM scenarios WHERE project_id=$1`, `DELETE FROM repository_snapshots WHERE project_id=$1`, `DELETE FROM discoveries WHERE project_id=$1`, `DELETE FROM projects WHERE id=$1`} {
+		for _, query := range []string{`DELETE FROM releases WHERE project_id=$1`, `DELETE FROM runs WHERE project_id=$1`, `DELETE FROM scenarios WHERE project_id=$1`, `DELETE FROM repository_snapshots WHERE project_id=$1`, `DELETE FROM discoveries WHERE project_id=$1`, `DELETE FROM projects WHERE id=$1`} {
 			if _, err := testDB.Exec(ctx, query, project.ID); err != nil {
 				t.Errorf("cleanup: %v", err)
 			}
@@ -434,5 +434,89 @@ func TestHTTPBoundary(t *testing.T) {
 	}
 	if run.Status != "passed" || run.Gate != "pass" {
 		t.Fatalf("derived status: %+v", run)
+	}
+	releaseInput := qa.ReleaseInput{
+		DeploymentKey: "deploy-123", BaseURL: "http://localhost:4174", Mode: "blocking", ScenarioIDs: []string{scenario.ID},
+		Repositories: []qa.ReleaseRepositoryInput{{SnapshotID: snapshot.ID, Repository: snapshot.Repository, Role: snapshot.Role, CommitSHA: snapshot.CommitSHA}},
+	}
+	releasePayload, err := json.Marshal(releaseInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	releasePath := "/api/projects/" + project.ID + "/releases"
+	if resp, _ := request("POST", releasePath, "", string(releasePayload)); resp.StatusCode != 401 {
+		t.Fatalf("release authorization: %d", resp.StatusCode)
+	}
+	resp, body = request("POST", releasePath, "api-token", string(releasePayload))
+	if resp.StatusCode != 202 {
+		t.Fatalf("create release: %d %s", resp.StatusCode, body)
+	}
+	var release qa.Release
+	if err := json.Unmarshal(body, &release); err != nil {
+		t.Fatal(err)
+	}
+	if release.ID == "" || release.Run.ID == "" || release.Run.Scenarios[0].ID != scenario.ID || release.Repositories[0].ContentSHA256 != snapshot.ContentSHA256 {
+		t.Fatalf("release response: %+v", release)
+	}
+	resp, body = request("POST", releasePath, "api-token", string(releasePayload))
+	if resp.StatusCode != 202 || !bytes.Contains(body, []byte(release.Run.ID)) {
+		t.Fatalf("release retry: %d %s", resp.StatusCode, body)
+	}
+	for _, path := range []string{releasePath + "/" + release.ID, releasePath + "/by-key/" + release.DeploymentKey} {
+		resp, body = request("GET", path, "api-token", "")
+		if resp.StatusCode != 200 || !bytes.Contains(body, []byte(release.Run.ID)) {
+			t.Fatalf("release detail %s: %d %s", path, resp.StatusCode, body)
+		}
+	}
+	resp, body = request("GET", releasePath, "api-token", "")
+	if resp.StatusCode != 200 || !bytes.Contains(body, []byte(release.ID)) {
+		t.Fatalf("release list: %d %s", resp.StatusCode, body)
+	}
+	resp, _ = request("GET", "/api/projects/missing/releases/"+release.ID, "api-token", "")
+	if resp.StatusCode != 404 {
+		t.Fatalf("cross-project release: %d", resp.StatusCode)
+	}
+	releaseInput.BaseURL = "http://example.test"
+	deniedPayload, err := json.Marshal(releaseInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, _ = request("POST", releasePath, "api-token", string(deniedPayload))
+	if resp.StatusCode != 400 {
+		t.Fatalf("denied origin: %d", resp.StatusCode)
+	}
+	releaseInput.BaseURL = "http://localhost:4174"
+	releaseInput.Mode = "advisory"
+	changedPayload, err := json.Marshal(releaseInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, _ = request("POST", releasePath, "api-token", string(changedPayload))
+	if resp.StatusCode != 409 {
+		t.Fatalf("changed release: %d", resp.StatusCode)
+	}
+	resp, body = request("POST", "/api/worker/claim", "worker-token", `{"worker_id":"release-worker"}`)
+	if resp.StatusCode != 200 {
+		t.Fatalf("claim release run: %d %s", resp.StatusCode, body)
+	}
+	if err := json.Unmarshal(body, &claim); err != nil {
+		t.Fatal(err)
+	}
+	if claim.Run.ID != release.Run.ID {
+		t.Fatalf("claimed unexpected run: %+v", claim.Run)
+	}
+	resp, body = request("POST", "/api/worker/runs/"+release.Run.ID+"/complete", "worker-token", `{"lease_token":"`+claim.LeaseToken+`","results":[{"scenario_id":"`+scenario.ID+`","status":"failed","message":"dashboard total incorrect","duration_ms":10,"artifacts":[]}]}`)
+	if resp.StatusCode != 200 {
+		t.Fatalf("complete release run: %d %s", resp.StatusCode, body)
+	}
+	resp, body = request("GET", releasePath+"/by-key/"+release.DeploymentKey, "api-token", "")
+	if resp.StatusCode != 200 {
+		t.Fatalf("completed release detail: %d %s", resp.StatusCode, body)
+	}
+	if err := json.Unmarshal(body, &release); err != nil {
+		t.Fatal(err)
+	}
+	if release.Run.Status != "failed" || release.Run.Gate != "fail" || len(release.Run.Results) != 1 || release.Run.Results[0].Message != "dashboard total incorrect" {
+		t.Fatalf("completed release status: %+v", release.Run)
 	}
 }

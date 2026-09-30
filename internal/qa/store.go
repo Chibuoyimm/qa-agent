@@ -135,18 +135,8 @@ func (s *Store) ListScenarios(ctx context.Context, projectID string) ([]Scenario
 }
 
 func (s *Store) CreateRun(ctx context.Context, projectID string, in RunInput) (Run, error) {
-	if in.Mode != "advisory" && in.Mode != "blocking" {
-		return Run{}, fmt.Errorf("%w: mode must be advisory or blocking", ErrInvalid)
-	}
-	if len(in.ScenarioIDs) == 0 || len(in.ScenarioIDs) > 50 {
-		return Run{}, fmt.Errorf("%w: select 1–50 scenarios", ErrInvalid)
-	}
-	selected := make(map[string]bool, len(in.ScenarioIDs))
-	for _, id := range in.ScenarioIDs {
-		if id == "" || selected[id] {
-			return Run{}, fmt.Errorf("%w: scenario_ids must be nonempty and unique", ErrInvalid)
-		}
-		selected[id] = true
+	if err := validateRunInput(in); err != nil {
+		return Run{}, err
 	}
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
@@ -160,6 +150,38 @@ func (s *Store) CreateRun(ctx context.Context, projectID string, in RunInput) (R
 		}
 		return Run{}, err
 	}
+	id, err := newID()
+	if err != nil {
+		return Run{}, err
+	}
+	run, err := createRunTx(ctx, tx, id, projectID, baseURL, in)
+	if err != nil {
+		return Run{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Run{}, err
+	}
+	return run, nil
+}
+
+func validateRunInput(in RunInput) error {
+	if in.Mode != "advisory" && in.Mode != "blocking" {
+		return fmt.Errorf("%w: mode must be advisory or blocking", ErrInvalid)
+	}
+	if len(in.ScenarioIDs) == 0 || len(in.ScenarioIDs) > 50 {
+		return fmt.Errorf("%w: select 1–50 scenarios", ErrInvalid)
+	}
+	selected := make(map[string]bool, len(in.ScenarioIDs))
+	for _, id := range in.ScenarioIDs {
+		if id == "" || selected[id] {
+			return fmt.Errorf("%w: scenario_ids must be nonempty and unique", ErrInvalid)
+		}
+		selected[id] = true
+	}
+	return nil
+}
+
+func createRunTx(ctx context.Context, tx pgx.Tx, id, projectID, baseURL string, in RunInput) (Run, error) {
 	rows, err := tx.Query(ctx, `SELECT id,project_id,name,description,expected_outcome,approved,steps,created_at
 		FROM scenarios WHERE project_id=$1 AND id=ANY($2)`, projectID, in.ScenarioIDs)
 	if err != nil {
@@ -199,18 +221,11 @@ func (s *Store) CreateRun(ctx context.Context, projectID string, in RunInput) (R
 	if err != nil {
 		return Run{}, err
 	}
-	id, err := newID()
-	if err != nil {
-		return Run{}, err
-	}
 	var created time.Time
 	err = tx.QueryRow(ctx, `INSERT INTO runs(id,project_id,base_url,mode,status,gate,scenarios,results)
 		VALUES($1,$2,$3,$4,'queued','pending',$5,'[]'::jsonb) RETURNING created_at`,
 		id, projectID, baseURL, in.Mode, snapshot).Scan(&created)
 	if err != nil {
-		return Run{}, err
-	}
-	if err := tx.Commit(ctx); err != nil {
 		return Run{}, err
 	}
 	return Run{ID: id, ProjectID: projectID, BaseURL: baseURL, Mode: in.Mode, Status: "queued", Gate: "pending", Scenarios: scenarios, Results: []ScenarioResult{}, CreatedAt: created}, nil

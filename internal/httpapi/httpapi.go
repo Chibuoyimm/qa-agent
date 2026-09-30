@@ -43,6 +43,10 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("POST /api/projects/{id}/scenarios", a.authorize(a.apiToken, a.createScenario))
 	mux.Handle("GET /api/projects/{id}/runs", a.authorize(a.apiToken, a.listRuns))
 	mux.Handle("POST /api/projects/{id}/runs", a.authorize(a.apiToken, a.createRun))
+	mux.Handle("POST /api/projects/{id}/releases", a.authorize(a.apiToken, a.createRelease))
+	mux.Handle("GET /api/projects/{id}/releases", a.authorize(a.apiToken, a.listReleases))
+	mux.Handle("GET /api/projects/{id}/releases/by-key/{deployment_key}", a.authorize(a.apiToken, a.getReleaseByKey))
+	mux.Handle("GET /api/projects/{id}/releases/{release_id}", a.authorize(a.apiToken, a.getRelease))
 	mux.Handle("GET /api/runs/{id}", a.authorize(a.apiToken, a.getRun))
 	mux.Handle("POST /api/runs/{id}/cancel", a.authorize(a.apiToken, a.cancelRun))
 	mux.Handle("POST /api/worker/claim", a.authorize(a.workerToken, a.claimRun))
@@ -445,6 +449,46 @@ func (a *API) createRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, run)
+}
+
+func (a *API) createRelease(w http.ResponseWriter, r *http.Request) {
+	var in qa.ReleaseInput
+	if !decodeJSONLimit(w, r, &in, 64<<10) {
+		return
+	}
+	release, err := a.store.CreateRelease(r.Context(), r.PathValue("id"), in)
+	if err != nil {
+		a.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, release)
+}
+
+func (a *API) listReleases(w http.ResponseWriter, r *http.Request) {
+	releases, err := a.store.ListReleases(r.Context(), r.PathValue("id"))
+	if err != nil {
+		a.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, releases)
+}
+
+func (a *API) getReleaseByKey(w http.ResponseWriter, r *http.Request) {
+	release, err := a.store.GetReleaseByKey(r.Context(), r.PathValue("id"), r.PathValue("deployment_key"))
+	if err != nil {
+		a.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, release)
+}
+
+func (a *API) getRelease(w http.ResponseWriter, r *http.Request) {
+	release, err := a.store.GetRelease(r.Context(), r.PathValue("id"), r.PathValue("release_id"))
+	if err != nil {
+		a.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, release)
 }
 
 func (a *API) getRun(w http.ResponseWriter, r *http.Request) {
