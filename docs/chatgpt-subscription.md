@@ -45,3 +45,11 @@ Automated Go tests exercise the real loopback callback with signed synthetic ID 
 `make integration` exercises the real web workspace, API, PostgreSQL, and browser worker. The subscription UI uses synthetic account and provider responses to check connection/cancellation, model and account consent, quota errors, draft review, and disconnect; draft persistence uses the real database. It makes no paid model request and does not prove real account admission or live model/schema compatibility.
 
 For the live acceptance check, sign in with an eligible account and use synthetic sample context to generate proposals. Review and approve meaningful checks, then execute them against the healthy and faulty sample builds. Record completed inference and observed browser outcomes separately from sign-in success. Keep credentials and raw authorization URLs out of evidence.
+
+## Live acceptance — 30 September 2026
+
+An operator completed real ChatGPT sign-in and granted plan usage. The account-specific catalog loaded, and a `gpt-5.6-sol` request through the QA web panel returned three completed proposals using only public synthetic sample facts. Each draft was reviewed in the editor and saved without approval. The API rejected running those unapproved drafts.
+
+After comparing every step and expected value with the independent fixture requirements, reviewed copies were approved for this disposable test. All three passed on the healthy sample. Against the controlled faulty sample, the revenue scenario failed on the incorrect total while invalid-login and signout scenarios still passed; the blocking gate failed. Credentials and account identifiers were excluded from saved verification evidence.
+
+The live route returned finished output-item events followed by a completion event with an empty output array, and omitted a content-type header. Regression tests now cover that shape, mismatched response identities, duplicate/missing items, interrupted streams, and quota errors after finished text. This verifies one account and one selected model; it does not establish every model's compatibility, general application coverage, renewal under a real token expiry, or hosted commercial access.
