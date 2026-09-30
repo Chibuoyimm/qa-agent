@@ -80,7 +80,8 @@ var (
 	knownSecret    = regexp.MustCompile(`(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-(?:proj-)?[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{20,}|-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----)`)
 )
 
-func validate(in Input, token string) error {
+// Validate checks an import request and the optional GitHub token before provider access.
+func Validate(in Input, token string) error {
 	parts := strings.Split(in.Repository, "/")
 	if len(parts) != 2 || len(parts[0]) > 39 || len(parts[1]) > 100 || !repositoryPart.MatchString(parts[0]) || !repositoryPart.MatchString(parts[1]) || parts[1] == "." || parts[1] == ".." {
 		return fmt.Errorf("%w: repository must be owner/name", ErrInvalid)
@@ -140,7 +141,7 @@ func unsafeName(name string) bool {
 }
 
 func (c *Client) Fetch(ctx context.Context, in Input, token string) (Snapshot, error) {
-	if err := validate(in, token); err != nil {
+	if err := Validate(in, token); err != nil {
 		return Snapshot{}, err
 	}
 	select {

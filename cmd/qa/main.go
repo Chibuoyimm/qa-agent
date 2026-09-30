@@ -37,11 +37,14 @@ func main() {
 }
 
 func execute(ctx context.Context, args []string, getenv func(string) string, out, errOut io.Writer) int {
+	if len(args) > 0 && args[0] == "release" {
+		return executeRelease(ctx, args[1:], getenv, out, errOut)
+	}
 	if len(args) > 0 && args[0] == "discover" {
 		return executeDiscovery(ctx, args[1:], getenv, out, errOut)
 	}
 	if len(args) == 0 || args[0] != "run" {
-		fmt.Fprintln(errOut, "Usage: qa run --project ID --scenarios ID,ID [--mode advisory|blocking] [--timeout 5m] | qa discover --project ID [--start-path /] [--max-pages 3] [--setup-scenario ID] [--timeout 2m] [--json]")
+		fmt.Fprintln(errOut, "Usage: qa run --project ID --scenarios ID,ID [--mode advisory|blocking] [--timeout 5m] | qa discover --project ID [--start-path /] [--max-pages 3] [--setup-scenario ID] [--timeout 2m] [--json] | qa release --manifest FILE [--timeout 10m] [--poll 1s] [--json]")
 		return 2
 	}
 	flags := flag.NewFlagSet("qa run", flag.ContinueOnError)

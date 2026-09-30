@@ -1,0 +1,125 @@
+# Copy to .github/workflows/deployment-qa.yml in the application repository.
+name: Deployment QA
+on:
+  workflow_call:
+    inputs:
+      qa_revision:
+        description: Reviewed full commit SHA of Chibuoyimm/qa-agent
+        required: true
+        type: string
+      qa_api_url:
+        required: true
+        type: string
+      project_id:
+        required: true
+        type: string
+      deployment_key:
+        description: Stable deployment identifier, preserved across retries
+        required: true
+        type: string
+      deployment_url:
+        required: true
+        type: string
+      scenario_ids:
+        description: JSON array of approved scenario IDs
+        required: true
+        type: string
+      frontend_repository:
+        required: true
+        type: string
+      frontend_commit_sha:
+        description: Actual frontend revision built by the deploy job
+        required: true
+        type: string
+      frontend_paths:
+        description: JSON array of selected source paths
+        required: true
+        type: string
+      backend_repository:
+        default: ''
+        type: string
+      backend_commit_sha:
+        default: ''
+        type: string
+      backend_paths:
+        default: '[]'
+        type: string
+      mode:
+        default: advisory
+        type: string
+      readiness_path:
+        default: /healthz
+        type: string
+    secrets:
+      QA_API_TOKEN:
+        required: true
+      QA_GITHUB_TOKEN:
+        description: Optional fine-grained read token for the selected private repositories
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  qa:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: Chibuoyimm/qa-agent
+          ref: ${{ inputs.qa_revision }}
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: '1.27.1'
+      - name: Build reviewed QA client
+        run: go build -o bin/qa ./cmd/qa
+      - name: Write deployment manifest
+        env:
+          PROJECT_ID: ${{ inputs.project_id }}
+          DEPLOYMENT_KEY: ${{ inputs.deployment_key }}
+          DEPLOYMENT_URL: ${{ inputs.deployment_url }}
+          READINESS_PATH: ${{ inputs.readiness_path }}
+          QA_MODE: ${{ inputs.mode }}
+          SCENARIO_IDS: ${{ inputs.scenario_ids }}
+          FRONTEND_REPOSITORY: ${{ inputs.frontend_repository }}
+          FRONTEND_COMMIT_SHA: ${{ inputs.frontend_commit_sha }}
+          FRONTEND_PATHS: ${{ inputs.frontend_paths }}
+          BACKEND_REPOSITORY: ${{ inputs.backend_repository }}
+          BACKEND_COMMIT_SHA: ${{ inputs.backend_commit_sha }}
+          BACKEND_PATHS: ${{ inputs.backend_paths }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          sources = [{"repository": os.environ["FRONTEND_REPOSITORY"],
+                      "role": "frontend", "commit_sha": os.environ["FRONTEND_COMMIT_SHA"],
+                      "paths": json.loads(os.environ["FRONTEND_PATHS"])}]
+          if os.environ["BACKEND_REPOSITORY"]:
+              sources.append({"repository": os.environ["BACKEND_REPOSITORY"],
+                              "role": "backend", "commit_sha": os.environ["BACKEND_COMMIT_SHA"],
+                              "paths": json.loads(os.environ["BACKEND_PATHS"])})
+          elif os.environ["BACKEND_COMMIT_SHA"] or json.loads(os.environ["BACKEND_PATHS"]):
+              raise SystemExit("Backend inputs must be supplied together")
+          manifest = {"project_id": os.environ["PROJECT_ID"],
+                      "deployment_key": os.environ["DEPLOYMENT_KEY"],
+                      "base_url": os.environ["DEPLOYMENT_URL"],
+                      "readiness_path": os.environ["READINESS_PATH"], "mode": os.environ["QA_MODE"],
+                      "scenario_ids": json.loads(os.environ["SCENARIO_IDS"]), "repositories": sources}
+          with open("release.json", "w") as output:
+              json.dump(manifest, output)
+          PY
+      - name: Check deployment and return its gate
+        env:
+          QA_API_BASE_URL: ${{ inputs.qa_api_url }}
+          QA_API_TOKEN: ${{ secrets.QA_API_TOKEN }}
+          QA_GITHUB_TOKEN: ${{ secrets.QA_GITHUB_TOKEN }}
+        run: bin/qa release --manifest release.json --timeout 10m --json > release-result.json
+      - name: Save release result
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: deployment-qa-result
+          path: release-result.json
+          if-no-files-found: ignore
+          retention-days: 7
