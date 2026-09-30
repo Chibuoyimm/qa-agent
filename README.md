@@ -38,6 +38,10 @@ To see the revenue defect, stop the sample and restart it with `QA_SAMPLE_DEFECT
 
 ## Release pipelines
 
+Use `bin/qa release --manifest release.json --timeout 10m --json` to wait for a deployment, import its exact frontend/backend revisions, run approved checks, and return the gate. The **Releases** page shows the deployment URL, commits, frozen expectations, and findings. A stable deployment key lets pipeline retries resume the original run without executing actions again. See [the manifest, API, and GitHub Actions setup](docs/deployment-qa.md), including a reusable workflow example.
+
+For a standalone run against the project's default URL:
+
 ```sh
 go build -o bin/qa ./cmd/qa
 QA_API_BASE_URL=https://your-private-qa-api.example \
@@ -63,9 +67,9 @@ TEST_DATABASE_URL="$DATABASE_URL" go test -race ./...
 make integration
 ```
 
-`QA_PROOF_GITHUB=1 make integration` additionally verifies a live public GitHub import; normal CI uses local fixtures and fake provider transports for network boundaries.
+`QA_PROOF_GITHUB=1 make integration` additionally verifies the complete release command with live public GitHub imports. Normal CI seeds the external repository snapshots locally and verifies the real release API, database, browser worker, and CLI resume path; command tests cover new-import/readiness boundaries with HTTP fixtures.
 
-`make integration` builds the API and CLI, starts a disposable PostgreSQL container and healthy/faulty sample servers on temporary ports, and runs real Chromium checks. It verifies release decisions, missing secrets, approval rejection, cancellation, persistence across API restart, CLI exit codes, and the web-to-worker flow. It removes the processes/container it creates and retains synthetic evidence in ignored `artifacts/integration-*` directories. Database unit/integration tests use temporary schemas and remove them afterward.
+`make integration` builds the API and CLI, starts a disposable PostgreSQL container and healthy/faulty sample servers on temporary ports, and runs real Chromium checks. It verifies deployment records and gates, retry reuse, run-specific targets, saved source review, missing secrets, approval rejection, cancellation, persistence across API restart, CLI exit codes, and the web-to-worker flow. It removes the processes/container it creates and retains synthetic evidence in ignored `artifacts/integration-*` directories. Database unit/integration tests use temporary schemas and remove them afterward.
 
 The GitHub Actions workflow runs the same checks on pushes and pull requests. No paid model calls or customer credentials are required. Browser evidence includes screenshots and videos; the UI currently displays worker-local paths rather than hosting those files.
 

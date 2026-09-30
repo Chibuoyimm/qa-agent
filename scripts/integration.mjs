@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import { createServer } from 'node:net';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile, open } from 'node:fs/promises';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -203,6 +203,89 @@ try {
   assert.equal(JSON.parse(discoveryJSON).status, 'completed');
   observations.push({ name: 'Discovery CLI executes an authenticated browser job and emits JSON', status: 'passed' });
 
+  const sourceRevision = repositorySnapshot?.commit_sha ?? command('git', ['rev-parse', 'HEAD']);
+  const sourceSpecs = [
+    { repository: 'Chibuoyimm/qa-agent', role: 'frontend', commit_sha: sourceRevision, paths: ['sample/README.md', 'sample/scenarios.json'] },
+    { repository: 'Chibuoyimm/qa-agent', role: 'backend', commit_sha: sourceRevision, paths: ['sample/server.js'] },
+  ];
+  // Offline CI seeds only the external GitHub boundary. The release API,
+  // database, worker, target browser, and CLI resume flow are all real.
+  const seedSnapshot = async spec => {
+    const id = randomBytes(16).toString('hex');
+    const sourceFiles = await Promise.all(spec.paths.map(async path => ({ path, content: await readFile(resolve(root, path), 'utf8') })));
+    const hash = createHash('sha256');
+    for (const file of sourceFiles) hash.update(file.path).update('\0').update(file.content).update('\0');
+    const bytes = sourceFiles.reduce((sum, file) => sum + Buffer.byteLength(file.content), 0);
+    const literal = value => `'${String(value).replaceAll("'", "''")}'`;
+    command('docker', ['exec', container, 'psql', '-U', 'qa', '-d', 'qa_proof', '-v', 'ON_ERROR_STOP=1', '-c',
+      `INSERT INTO repository_snapshots(id,project_id,repository,ref,role,commit_sha,content_sha256,files,file_count,total_bytes) VALUES (${[id, healthy.project.id, spec.repository, spec.commit_sha, spec.role, spec.commit_sha, hash.digest('hex'), JSON.stringify(sourceFiles)].map(literal).join(',')},${sourceFiles.length},${bytes})`]);
+    return { snapshot_id: id, repository: spec.repository, role: spec.role, commit_sha: spec.commit_sha };
+  };
+  const sourceInputs = process.env.QA_PROOF_GITHUB === '1' ? null : await Promise.all(sourceSpecs.map(seedSnapshot));
+  const releaseCLI = async (name, manifestInput, expectedCode) => {
+    const manifestPath = resolve(evidence, `${name}-manifest.json`);
+    await writeFile(manifestPath, JSON.stringify(manifestInput, null, 2));
+    const child = spawn(resolve(evidence, 'qa'), ['release', '--manifest', manifestPath, '--timeout', '120s', '--poll', '100ms', '--json'], { cwd: root, env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
+    children.push(child); manifest.processes.push({ name, pid: child.pid });
+    let stdout = '', stderr = '';
+    child.stdout.on('data', data => { stdout += data; });
+    child.stderr.on('data', data => { stderr += data; });
+    const [status] = await once(child, 'exit');
+    assert.equal(status, expectedCode, stderr);
+    await writeFile(resolve(evidence, `${name}.json`), stdout);
+    const release = JSON.parse(stdout);
+    manifest.runs.push(release.run.id);
+    return release;
+  };
+  const releaseManifest = (deploymentKey, url) => ({ project_id: healthy.project.id, deployment_key: deploymentKey,
+    base_url: url, readiness_path: '/healthz', mode: 'blocking', scenario_ids: [healthy.scenarios[0].id], repositories: sourceSpecs });
+  const releaseEndpoint = `/api/projects/${healthy.project.id}/releases`;
+  const createRelease = async (deploymentKey, url) => {
+    const input = releaseManifest(deploymentKey, url);
+    if (sourceInputs) {
+      const queuedRelease = await api(releaseEndpoint, { deployment_key: deploymentKey, base_url: url, mode: input.mode,
+        scenario_ids: input.scenario_ids, repositories: sourceInputs });
+      await waitRun(queuedRelease.run.id);
+    }
+    return releaseCLI(`release-${deploymentKey}`, input, url === goodURL ? 0 : 1);
+  };
+  const goodRelease = await createRelease('healthy-deployment', goodURL);
+  const badRelease = await createRelease('faulty-deployment', badURL);
+  assert.equal(goodRelease.run.status, 'passed');
+  assert.equal(badRelease.run.status, 'failed');
+  assert.equal(badRelease.run.gate, 'fail');
+  assert.equal(badRelease.base_url, badURL);
+  assert.equal(badRelease.run.base_url, badURL);
+  assert.equal((await api('/api/projects')).find(project => project.id === healthy.project.id).base_url, goodURL);
+  assert.deepEqual(goodRelease.repositories.map(source => source.role).sort(), ['backend', 'frontend']);
+  const runsBeforeRetry = await api(`/api/projects/${healthy.project.id}/runs`);
+  const snapshotsBeforeRetry = await api(`/api/projects/${healthy.project.id}/repositories`);
+  const retriedRelease = await releaseCLI('release-retry', { ...releaseManifest('healthy-deployment', goodURL), readiness_path: '/not-ready' }, 0);
+  assert.equal(retriedRelease.id, goodRelease.id);
+  assert.equal(retriedRelease.run.id, goodRelease.run.id);
+  assert.deepEqual(await api(`/api/projects/${healthy.project.id}/runs`), runsBeforeRetry);
+  assert.deepEqual(await api(`/api/projects/${healthy.project.id}/repositories`), snapshotsBeforeRetry);
+  const repeatedInput = { deployment_key: goodRelease.deployment_key, base_url: goodURL, mode: 'blocking', scenario_ids: [healthy.scenarios[0].id],
+    repositories: goodRelease.repositories.map(({ snapshot_id, repository, role, commit_sha }) => ({ snapshot_id, repository, role, commit_sha })) };
+  const retries = await Promise.all(Array.from({ length: 8 }, () => api(releaseEndpoint, repeatedInput)));
+  assert.ok(retries.every(release => release.id === goodRelease.id && release.run.id === goodRelease.run.id));
+  assert.deepEqual(await api(`/api/projects/${healthy.project.id}/runs`), runsBeforeRetry);
+  await api(releaseEndpoint, { ...repeatedInput, base_url: badURL }, { status: 409 });
+  await api(`/api/projects/${faulty.project.id}/releases/${goodRelease.id}`, undefined, { status: 404 });
+  await stop(server);
+  server = await start('api-release-restarted', resolve(evidence, 'server'), [], env);
+  await ready(`${base}/healthz`, server);
+  assert.deepEqual(await api(`${releaseEndpoint}/${goodRelease.id}`), goodRelease);
+  observations.push({ name: 'Deployment releases pass healthy and block faulty targets, retain both revisions, and preserve project default', status: 'passed', boundary: sourceInputs ? 'seeded GitHub snapshots; real release API/database/browser/CLI resume' : 'live GitHub import and complete release CLI', release_ids: [goodRelease.id, badRelease.id] });
+  observations.push({ name: 'Pipeline retries and concurrent requests reuse one run; changed inputs rejected; releases survive restart', status: 'passed' });
+  // Push linked source records outside the recent-import window. Review links
+  // must still retrieve the release's original snapshot by ID.
+  const linkedBackend = badRelease.repositories.find(source => source.role === 'backend');
+  command('docker', ['exec', container, 'psql', '-U', 'qa', '-d', 'qa_proof', '-v', 'ON_ERROR_STOP=1', '-c',
+    `INSERT INTO repository_snapshots(id,project_id,repository,ref,role,commit_sha,content_sha256,files,file_count,total_bytes)
+     SELECT md5(id || '-pagination-' || n),project_id,repository,ref,role,commit_sha,content_sha256,files,file_count,total_bytes
+     FROM repository_snapshots CROSS JOIN generate_series(1,101) n WHERE id='${linkedBackend.snapshot_id}'`]);
+
   const webPort = await port();
   const webURL = `http://127.0.0.1:${webPort}`;
   const web = await start('web', process.execPath, ['web/node_modules/vite/bin/vite.js', '--host', '127.0.0.1', '--port', String(webPort), '--strictPort', 'web'], env);
@@ -219,9 +302,28 @@ try {
     await page.getByRole('button', { name: 'Open workspace' }).click();
     await page.getByRole('button', { name: healthy.project.name, exact: true }).click();
 
+    await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('button', { name: 'Releases', exact: true }).click();
+    const releaseDetails = page.getByRole('region', { name: 'Release details', exact: true });
+    await releaseDetails.getByRole('heading', { name: 'faulty-deployment', exact: true }).waitFor();
+    await releaseDetails.getByRole('link', { name: badURL, exact: true }).waitFor();
+    assert.equal(await releaseDetails.getByText(sourceRevision, { exact: true }).count(), 2, 'Both full source revisions are visible');
+    await releaseDetails.locator('details').first().locator('summary').click();
+    await releaseDetails.getByText(badRelease.run.results[0].message, { exact: true }).waitFor();
+    await page.screenshot({ path: resolve(evidence, 'release-desktop.png'), fullPage: true });
+    await page.setViewportSize({ width: 390, height: 844 });
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'Mobile release details have no horizontal page overflow');
+    await page.screenshot({ path: resolve(evidence, 'release-mobile.png'), fullPage: true });
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await releaseDetails.locator('article').filter({ hasText: 'backend' }).getByRole('button', { name: 'Review saved snapshot', exact: false }).click();
+    await page.getByText('sample/server.js', { exact: true }).first().waitFor();
+    await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+    await page.getByText('sample/server.js', { exact: true }).first().waitFor();
+    observations.push({ name: 'Desktop/mobile Releases show full revisions and faulty findings; linked snapshots older than 100 imports remain reviewable after refresh', status: 'passed' });
+
     if (repositorySnapshot) {
-      await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('button', { name: 'Repository', exact: true }).click();
-      await page.getByRole('button', { name: 'Review files', exact: true }).click();
+      await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('button', { name: 'Releases', exact: true }).click();
+      await releaseDetails.getByRole('heading', { name: 'faulty-deployment', exact: true }).waitFor();
+      await releaseDetails.locator('article').filter({ hasText: 'frontend' }).getByRole('button', { name: 'Review saved snapshot', exact: false }).click();
       await page.getByText('sample/scenarios.json', { exact: true }).waitFor();
       await page.screenshot({ path: resolve(evidence, 'repository-context.png'), fullPage: true });
     }

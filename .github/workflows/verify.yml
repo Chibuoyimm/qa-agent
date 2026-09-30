@@ -66,3 +66,6 @@ jobs:
             artifacts/integration-*/observations.json
             artifacts/integration-*/manifest.json
             artifacts/integration-*/cli.txt
+            artifacts/integration-*/release-*.json
+            artifacts/integration-*/release-desktop.png
+            artifacts/integration-*/release-mobile.png

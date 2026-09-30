@@ -3,12 +3,13 @@ import {
   Activity, AlertCircle, ArrowDownRight, ArrowRight, Check, CheckCircle2,
   ChevronDown, ChevronRight, CircleDashed, Clock3, Code2, Compass, FileJson2,
   FolderOpen, HelpCircle, KeyRound, Layers3, LoaderCircle, LockKeyhole,
-  Menu, MoreHorizontal, Play, Plus, RefreshCw, ShieldCheck, ShieldX,
+  Menu, MoreHorizontal, Play, Plus, RefreshCw, Rocket, ShieldCheck, ShieldX,
   Sparkles, Square, Terminal, Trash2, X,
 } from 'lucide-react'
 import AiProposals from './AiProposals'
 import RepositorySnapshots from './RepositorySnapshots'
 import Discoveries from './Discoveries'
+import Releases from './Releases'
 import {
   api, defaultStep, emptyScenario, formatDate, isActive, shortId,
   validateScenario,
@@ -16,7 +17,7 @@ import {
   type Step, type StepAction,
 } from './api'
 
-type Page = 'overview' | 'scenarios' | 'repositories' | 'discoveries' | 'runs'
+type Page = 'overview' | 'scenarios' | 'repositories' | 'discoveries' | 'runs' | 'releases'
 type EditorMode = 'guided' | 'json'
 
 const statusText: Record<string, string> = {
@@ -246,6 +247,7 @@ function App() {
   const [cancelling, setCancelling] = useState(false)
   const [notice, setNotice] = useState('')
   const [mobileNav, setMobileNav] = useState(false)
+  const [focusSnapshotId, setFocusSnapshotId] = useState('')
 
   const project = projects.find(item => item.id === projectId)
   const approved = scenarios.filter(item => item.approved)
@@ -290,7 +292,7 @@ function App() {
   }, [])
 
   useEffect(() => { if (token) void loadProjects(token) }, [token, loadProjects])
-  useEffect(() => { if (token && projectId) { setScenarios([]); setRuns([]); setSelectedRun(null); setSelectedRunId(''); setSelectedScenarioIds([]); void loadProjectData(token, projectId) } }, [token, projectId, loadProjectData])
+  useEffect(() => { setFocusSnapshotId(''); if (token && projectId) { setScenarios([]); setRuns([]); setSelectedRun(null); setSelectedRunId(''); setSelectedScenarioIds([]); void loadProjectData(token, projectId) } }, [token, projectId, loadProjectData])
   useEffect(() => {
     if (!token || !selectedRunId) return
     let cancelled = false
@@ -367,18 +369,18 @@ function App() {
   function toggleScenario(id: string) { setSelectedScenarioIds(previous => previous.includes(id) ? previous.filter(item => item !== id) : [...previous, id]) }
   function selectPage(next: Page) { setPage(next); if (next !== 'scenarios') setAiOpen(false); setShowProjectForm(false); setMobileNav(false) }
   function openProjectForm() { setPage('overview'); setShowProjectForm(true); setMobileNav(false) }
-  function disconnect() { ++loadSequence.current; selectionProject.current = ''; setToken(''); setTokenInput(''); setProjects([]); setProjectId(''); setScenarios([]); setRuns([]); setSelectedRun(null); setSelectedRunId(''); setConnectionState('connecting') }
+  function disconnect() { ++loadSequence.current; selectionProject.current = ''; setToken(''); setTokenInput(''); setProjects([]); setProjectId(''); setScenarios([]); setRuns([]); setSelectedRun(null); setSelectedRunId(''); setFocusSnapshotId(''); setConnectionState('connecting') }
 
   if (!token) return <div className="auth-page"><div className="auth-grid" /><div className="auth-content"><div className="brand brand-auth"><span className="brand-mark"><Activity size={24} strokeWidth={2.5} /></span><span>qa<span className="brand-accent">agent</span><small>WORKSPACE</small></span></div><div className="auth-card"><div className="auth-symbol"><KeyRound size={24} /></div><div className="eyebrow">LOCAL PILOT · MILESTONE 01</div><h1>Proof you can repeat.</h1><p>Review approved checks, run them in a real browser, and see exactly where the evidence stands.</p><form onSubmit={event => { event.preventDefault(); if (tokenInput.trim()) setToken(tokenInput.trim()) }}><label className="field-label" htmlFor="api-token">API token</label><div className="token-input"><LockKeyhole size={18} /><input id="api-token" type="password" autoComplete="off" placeholder="Enter QA_API_TOKEN" value={tokenInput} onChange={event => setTokenInput(event.target.value)} /></div><button className="button button-primary auth-submit" disabled={!tokenInput.trim()}>Open workspace <ArrowRight size={17} /></button></form><div className="auth-foot"><ShieldCheck size={16} /><span>Your token stays in this browser tab’s memory and clears on reload.</span></div></div><p className="auth-caption">Designed for a trusted, controlled test environment.</p></div></div>
 
   return <div className="app-shell">
     <aside className={`sidebar ${mobileNav ? 'sidebar-open' : ''}`}><div className="sidebar-top"><div className="brand"><span className="brand-mark"><Activity size={20} strokeWidth={2.5} /></span><span>qa<span className="brand-accent">agent</span><small>WORKSPACE</small></span></div><button className="icon-button mobile-close" onClick={() => setMobileNav(false)} aria-label="Close navigation"><X size={20} /></button></div>
       <div className="sidebar-section-label">WORKSPACE</div><div className="project-switcher"><div className="project-avatar">{project?.name?.charAt(0).toUpperCase() ?? 'P'}</div><div><strong>{project?.name ?? 'No project'}</strong><small>{project ? new URL(project.base_url).host : 'Create your first project'}</small></div><ChevronDown size={15} /></div>
-      <div className="sidebar-section-label nav-label">NAVIGATION</div><nav aria-label="Main navigation"><button className={page === 'overview' ? 'nav-item active' : 'nav-item'} onClick={() => selectPage('overview')}><Layers3 size={18} />Overview</button><button className={page === 'scenarios' ? 'nav-item active' : 'nav-item'} onClick={() => selectPage('scenarios')}><ShieldCheck size={18} />Scenarios{scenarios.length > 0 && <span className="nav-count">{scenarios.length}</span>}</button><button className={page === 'repositories' ? 'nav-item active' : 'nav-item'} onClick={() => selectPage('repositories')}><Code2 size={18} />Repository</button><button className={page === 'discoveries' ? 'nav-item active' : 'nav-item'} onClick={() => selectPage('discoveries')}><Compass size={18} />Discover</button><button className={page === 'runs' ? 'nav-item active' : 'nav-item'} onClick={() => selectPage('runs')}><Play size={18} />Runs{runs.length > 0 && <span className="nav-count">{runs.length}</span>}</button></nav>
-      <div className="sidebar-projects"><div className="sidebar-section-label">PROJECTS <button className="icon-button small" aria-label="Create project" onClick={openProjectForm}><Plus size={15} /></button></div>{projects.map(item => <button key={item.id} className={`project-link ${item.id === projectId ? 'selected' : ''}`} onClick={() => { setProjectId(item.id); selectPage('overview') }}><span className="project-dot" />{item.name}</button>)}</div>
+      <div className="sidebar-section-label nav-label">NAVIGATION</div><nav aria-label="Main navigation"><button className={page === 'overview' ? 'nav-item active' : 'nav-item'} onClick={() => selectPage('overview')}><Layers3 size={18} />Overview</button><button className={page === 'scenarios' ? 'nav-item active' : 'nav-item'} onClick={() => selectPage('scenarios')}><ShieldCheck size={18} />Scenarios{scenarios.length > 0 && <span className="nav-count">{scenarios.length}</span>}</button><button className={page === 'repositories' ? 'nav-item active' : 'nav-item'} onClick={() => selectPage('repositories')}><Code2 size={18} />Repository</button><button className={page === 'discoveries' ? 'nav-item active' : 'nav-item'} onClick={() => selectPage('discoveries')}><Compass size={18} />Discover</button><button className={page === 'runs' ? 'nav-item active' : 'nav-item'} onClick={() => selectPage('runs')}><Play size={18} />Runs{runs.length > 0 && <span className="nav-count">{runs.length}</span>}</button><button className={page === 'releases' ? 'nav-item active' : 'nav-item'} onClick={() => selectPage('releases')}><Rocket size={18} />Releases</button></nav>
+      <div className="sidebar-projects"><div className="sidebar-section-label">PROJECTS <button className="icon-button small" aria-label="Create project" onClick={openProjectForm}><Plus size={15} /></button></div>{projects.map(item => <button key={item.id} className={`project-link ${item.id === projectId ? 'selected' : ''}`} onClick={() => { setFocusSnapshotId(''); setProjectId(item.id); selectPage('overview') }}><span className="project-dot" />{item.name}</button>)}</div>
       <div className="sidebar-bottom"><div className="connection"><span className={`connection-dot connection-${connectionState}`} /><span>{connectionState === 'connecting' ? 'Connecting to API' : connectionState === 'connected' ? 'API connected' : 'API unavailable'}</span></div><button className="sidebar-signout" onClick={disconnect}><KeyRound size={16} />Disconnect token</button></div>
     </aside>
-    <main className="main"><header className="topbar"><button className="icon-button mobile-menu" onClick={() => setMobileNav(true)} aria-label="Open navigation"><Menu size={21} /></button><div className="breadcrumb">Workspace <ChevronRight size={15} /> <strong>{page === 'overview' ? 'Overview' : page === 'scenarios' ? 'Scenarios' : page === 'repositories' ? 'Repository' : page === 'discoveries' ? 'Discover' : 'Runs'}</strong></div><div className="topbar-right"><span className="environment"><span />LOCAL ENVIRONMENT</span><span className="topbar-avatar">OP</span></div></header>
+    <main className="main"><header className="topbar"><button className="icon-button mobile-menu" onClick={() => setMobileNav(true)} aria-label="Open navigation"><Menu size={21} /></button><div className="breadcrumb">Workspace <ChevronRight size={15} /> <strong>{page === 'overview' ? 'Overview' : page === 'scenarios' ? 'Scenarios' : page === 'repositories' ? 'Repository' : page === 'discoveries' ? 'Discover' : page === 'releases' ? 'Releases' : 'Runs'}</strong></div><div className="topbar-right"><span className="environment"><span />LOCAL ENVIRONMENT</span><span className="topbar-avatar">OP</span></div></header>
       <div className="content">
         {notice && <div className="toast"><Check size={16} />{notice}<button aria-label="Dismiss notice" onClick={() => setNotice('')}><X size={14} /></button></div>}
         {projectsError && <ErrorBanner message={projectsError} onRetry={() => void loadProjects(token)} />}
@@ -400,8 +402,9 @@ function App() {
                 {scenarios.length === 0 ? <EmptyState icon={<ShieldCheck size={28} />} title="No scenarios yet">Add an expected business outcome and browser steps to begin your coverage.</EmptyState> : <div className="scenario-grid"><div className="scenario-list-head"><h2>Configured checks</h2><span>{selectedScenarioIds.length} selected for next run</span></div>{scenarios.map(scenario => <article className={`scenario-card ${selectedScenarioIds.includes(scenario.id) ? 'selected' : ''}`} key={scenario.id}><div className="scenario-select"><input type="checkbox" aria-label={`Select ${scenario.name} for next run`} disabled={!scenario.approved} checked={selectedScenarioIds.includes(scenario.id)} onChange={() => toggleScenario(scenario.id)} /></div><div className="scenario-main"><div className="scenario-topline"><span className={`approval-label ${scenario.approved ? 'is-approved' : ''}`}>{scenario.approved ? <Check size={13} /> : <Clock3 size={13} />}{scenario.approved ? 'APPROVED' : 'UNAPPROVED'}</span><span>#{shortId(scenario.id)}</span></div><h3>{scenario.name}</h3>{scenario.description && <p className="scenario-description">{scenario.description}</p>}<div className="expected"><span>EXPECTED OUTCOME</span><p>{scenario.expected_outcome}</p></div><div className="scenario-footer"><span>{scenario.steps.length} {scenario.steps.length === 1 ? 'step' : 'steps'}</span><span>Created {formatDate(scenario.created_at)}</span><button className="scenario-review" onClick={() => reviewCopy(scenario)}>Review a copy <ArrowRight size={13} /></button></div></div></article>)}</div>}
                 {!aiOpen && approved.length > 0 && <div className="launch-bar"><div><strong>{selectedScenarioIds.length} approved {selectedScenarioIds.length === 1 ? 'scenario' : 'scenarios'} selected</strong><small>Each runs in a fresh browser context.</small></div><div className="launch-controls"><label htmlFor="scenario-mode">Mode</label><select id="scenario-mode" value={mode} onChange={event => setMode(event.target.value as RunMode)}><option value="advisory">Advisory · warn</option><option value="blocking">Blocking · fail</option></select><button className="button button-primary" disabled={launching || selectedScenarioIds.length === 0} onClick={() => void launchRun()}>{launching ? <LoaderCircle className="spin" size={16} /> : <Play size={16} />}{launching ? 'Queuing…' : 'Run checks'}</button></div></div>}
               </>}
-              {page === 'repositories' && <RepositorySnapshots key={projectId} token={token} projectId={projectId} />}
+              {page === 'repositories' && <RepositorySnapshots key={projectId} token={token} projectId={projectId} focusSnapshotId={focusSnapshotId} />}
               {page === 'discoveries' && <Discoveries key={projectId} token={token} projectId={projectId} approvedScenarios={approved} />}
+              {page === 'releases' && <Releases key={projectId} token={token} projectId={projectId} onOpenSnapshot={id => { setFocusSnapshotId(id); setPage('repositories') }} />}
               {page === 'runs' && <><div className="page-heading"><div><div className="eyebrow">BROWSER EXECUTION</div><h1>Runs & results</h1><p>Track what passed, what did not match, and what could not complete.</p></div><button className="button button-outline" onClick={() => void loadProjectData(token, projectId)}><RefreshCw size={16} />Refresh</button></div>
                 {runs.length === 0 ? <EmptyState icon={<Play size={28} />} title="No runs yet">Select approved scenarios and launch a browser check to see your first report.<button className="button button-primary" onClick={() => setPage('scenarios')}>Choose scenarios <ArrowRight size={16} /></button></EmptyState> : <div className="runs-layout"><aside className="runs-list"><div className="runs-list-header"><h2>Run history</h2><span>{runs.length}</span></div>{runs.map(run => <button key={run.id} className={`run-list-item ${run.id === selectedRunId ? 'active' : ''}`} onClick={() => setSelectedRunId(run.id)}><span className="run-item-top"><strong>{shortId(run.id)}</strong><StatusPill status={run.status} /></span><span>{run.scenarios.length} scenarios · {run.mode}</span><small>{formatDate(run.created_at)}</small></button>)}</aside><section className="panel report-panel">{selectedRun && selectedRun.id === selectedRunId ? <RunDetail run={selectedRun} onCancel={() => void cancelRun()} cancelling={cancelling} /> : <div className="loading-state"><LoaderCircle size={22} className="spin" />Loading report…</div>}</section></div>}
               </>}

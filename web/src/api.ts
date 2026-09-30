@@ -57,6 +57,26 @@ export type Run = {
   finished_at?: string
 }
 
+export type ReleaseRepository = {
+  snapshot_id: string
+  repository: string
+  role: RepositoryRole
+  commit_sha: string
+  content_sha256: string
+  paths: string[]
+}
+
+export type Release = {
+  id: string
+  project_id: string
+  deployment_key: string
+  base_url: string
+  mode: RunMode
+  repositories: ReleaseRepository[]
+  run: Run
+  created_at: string
+}
+
 export class ApiError extends Error {
   constructor(message: string, readonly status: number) {
     super(message)
