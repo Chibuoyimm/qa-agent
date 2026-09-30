@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"reflect"
 	"strings"
 
 	"github.com/Chibuoyimm/qa-agent/internal/chatgpt"
@@ -181,8 +180,21 @@ func readSubscriptionStream(body io.Reader) (providerResponse, error) {
 					return providerResponse{}, false, ErrUpstream
 				}
 				event.Response.Output = items
-			} else if len(items) > 0 && !reflect.DeepEqual(items, event.Response.Output) {
-				return providerResponse{}, false, ErrUpstream
+			} else if len(items) > 0 {
+				if len(items) != len(event.Response.Output) {
+					return providerResponse{}, false, ErrUpstream
+				}
+				for i, item := range items {
+					final := event.Response.Output[i]
+					if item.ID != final.ID || item.Type != final.Type || item.Role != final.Role || item.Status != final.Status || len(item.Content) != len(final.Content) {
+						return providerResponse{}, false, ErrUpstream
+					}
+					for j, content := range item.Content {
+						if content != final.Content[j] {
+							return providerResponse{}, false, ErrUpstream
+						}
+					}
+				}
 			}
 			return event.Response.providerResponse, true, nil
 		case "response.failed", "response.incomplete", "error":

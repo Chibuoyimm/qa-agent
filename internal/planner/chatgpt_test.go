@@ -78,11 +78,19 @@ func leanSubscriptionEvents(t *testing.T) (string, string, string) {
 
 func TestSubscriptionStreamCollectsFinishedItemsBeforeCompletion(t *testing.T) {
 	created, done, completed := leanSubscriptionEvents(t)
+	var doneEvent struct {
+		Item json.RawMessage `json:"item"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(strings.TrimPrefix(done, "data:"))), &doneEvent); err != nil {
+		t.Fatal(err)
+	}
+	fullCompleted := strings.Replace(completed, `"output":[]`, `"output":[`+string(doneEvent.Item)+`]`, 1)
 	for _, tc := range []struct {
 		name, body string
 		want       error
 	}{
 		{"lean completed response", created + done + completed, nil},
+		{"matching terminal items", created + done + fullCompleted, nil},
 		{"item without terminal event", created + done, ErrUpstream},
 		{"empty terminal without item", created + completed, ErrUpstream},
 		{"missing response identity", done + completed, ErrUpstream},
