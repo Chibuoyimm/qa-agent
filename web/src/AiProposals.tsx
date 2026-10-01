@@ -3,11 +3,12 @@ import {
   AlertCircle, ArrowRight, Check, CircleHelp, ExternalLink, Info, KeyRound, LoaderCircle,
   LockKeyhole, RefreshCw, ShieldCheck, Sparkles, Square, X,
 } from 'lucide-react'
-import { api, providerName, type AiProvider, type AiConfig, type AiProposalResponse, type ChatGptLogin, type ChatGptModel, type ChatGptProfile, type ChatGptStatus, type ScenarioInput } from './api'
+import { api, providerName, type AiProvider, type AiConfig, type AiProposalResponse, type ChatGptLogin, type ChatGptModel, type ChatGptProfile, type ChatGptStatus, type OpenCodeStatus, type ScenarioInput } from './api'
+import { OpenCodeConnection } from './OpenCodeConnection'
 import { SnapshotBrowser } from './RepositorySnapshots'
 import { DiscoveryBrowser } from './Discoveries'
 
-type CredentialMode = 'managed' | 'byok' | 'chatgpt'
+type CredentialMode = 'managed' | 'byok' | 'chatgpt' | 'opencode'
 
 function accountName(profile: ChatGptProfile): string {
   const name = profile.label || profile.email || 'ChatGPT account'
@@ -38,6 +39,8 @@ export default function AiProposals({ token, projectId, onClose, onReview }: {
   const [chatgptModelsLoading, setChatgptModelsLoading] = useState(false)
   const [chatgptError, setChatgptError] = useState('')
   const [chatgptNotice, setChatgptNotice] = useState('')
+  const [openCode, setOpenCode] = useState<OpenCodeStatus | null>(null)
+  const [openCodeBusy, setOpenCodeBusy] = useState(false)
   const [providerKey, setProviderKey] = useState('')
   const [prompt, setPrompt] = useState('')
   const [context, setContext] = useState('')
@@ -54,7 +57,8 @@ export default function AiProposals({ token, projectId, onClose, onReview }: {
   const identity = useRef(0)
   const chatgptRef = useRef<ChatGptStatus | null>(null)
   const selectedProfileIdRef = useRef('')
-  const providers = config?.providers ?? (config ? [{ provider: config.provider, models: config.models, managed_available: config.managed_available, byok_available: config.byok_available }] : [])
+  const apiProviders = config?.providers ?? (config ? [{ provider: config.provider, models: config.models, managed_available: config.managed_available, byok_available: config.byok_available }] : [])
+  const providers = [...apiProviders, ...(config?.opencode_enabled ? [{ provider: 'opencode-go' as const, models: [], managed_available: false, byok_available: false }] : [])]
   const selectedProvider = providers.find(item => item.provider === provider)
   const recipient = providerName(provider)
   const selectedProfile = chatgpt?.profiles.find(profile => profile.id === selectedProfileId)
@@ -91,6 +95,7 @@ export default function AiProposals({ token, projectId, onClose, onReview }: {
     setConfigError('')
     void api<AiConfig>(token, '/api/ai/config', { signal: abort.signal }).then(value => {
       setConfig(value)
+      setOpenCode(null)
       chatgptRef.current = value.chatgpt ?? null
       setChatgpt(value.chatgpt ?? null)
       const initialProfileId = value.chatgpt?.active_profile_id || value.chatgpt?.profiles.find(profile => profile.connected)?.id || ''
@@ -99,8 +104,9 @@ export default function AiProposals({ token, projectId, onClose, onReview }: {
       const choices = value.providers ?? [value]
       const first = choices.find(item => item.models.length && (item.managed_available || item.byok_available))
       const initial = first ?? choices.find(item => item.provider === 'openai')
-      setProvider(initial?.provider ?? 'openai')
-      const mode = initial?.managed_available ? 'managed' : initial?.byok_available ? 'byok' : value.chatgpt?.enabled ? 'chatgpt' : 'managed'
+      const useOpenCode = !first && !value.chatgpt?.enabled && value.opencode_enabled
+      setProvider(useOpenCode ? 'opencode-go' : initial?.provider ?? 'openai')
+      const mode = useOpenCode ? 'opencode' : initial?.managed_available ? 'managed' : initial?.byok_available ? 'byok' : value.chatgpt?.enabled ? 'chatgpt' : 'managed'
       setCredentialMode(mode)
       setProviderKey('')
       setWorkspaceId('')
@@ -158,10 +164,10 @@ export default function AiProposals({ token, projectId, onClose, onReview }: {
     return () => { window.clearInterval(timer); abort.abort() }
   }, [token, projectId, chatgpt?.login?.id, chatgpt?.login?.status])
 
-  const configured = Boolean(config && ((providers.some(item => item.models.length > 0 && (item.managed_available || item.byok_available))) || config.chatgpt?.enabled))
-  const chosenModelAvailable = credentialMode === 'chatgpt' ? chatgptModels.some(item => item.slug === model) : Boolean(selectedProvider?.models.includes(model))
-  const credentialReady = credentialMode === 'chatgpt' ? Boolean(selectedProfile?.connected && selectedProfile.sharing && selectedProfileId && chatgpt?.active_profile_id === selectedProfileId && !chatgptModelsLoading) : credentialMode === 'managed' ? Boolean(selectedProvider?.managed_available) : Boolean(selectedProvider?.byok_available && providerKey.trim())
-  const canGenerate = configured && !generating && !chatgptBusy && (credentialMode !== 'chatgpt' || !loginPending) && Boolean(prompt.trim() && (context.trim() || snapshotIds.length || discoveryId) && chosenModelAvailable && consent && credentialReady)
+  const configured = Boolean(config && ((providers.some(item => item.models.length > 0 && (item.managed_available || item.byok_available))) || config.chatgpt?.enabled || config.opencode_enabled))
+  const chosenModelAvailable = credentialMode === 'opencode' ? Boolean(openCode?.models.some(item => item.id === model)) : credentialMode === 'chatgpt' ? chatgptModels.some(item => item.slug === model) : Boolean(selectedProvider?.models.includes(model))
+  const credentialReady = credentialMode === 'opencode' ? Boolean(openCode?.connected && !openCodeBusy) : credentialMode === 'chatgpt' ? Boolean(selectedProfile?.connected && selectedProfile.sharing && selectedProfileId && chatgpt?.active_profile_id === selectedProfileId && !chatgptModelsLoading) : credentialMode === 'managed' ? Boolean(selectedProvider?.managed_available) : Boolean(selectedProvider?.byok_available && providerKey.trim())
+  const canGenerate = configured && !generating && !chatgptBusy && !openCodeBusy && (credentialMode !== 'chatgpt' || !loginPending) && Boolean(prompt.trim() && (context.trim() || snapshotIds.length || discoveryId) && chosenModelAvailable && consent && credentialReady)
   const selectedSources = [snapshotIds.length ? `${snapshotIds.length} selected repository ${snapshotIds.length === 1 ? 'snapshot' : 'snapshots'}` : '', discoveryId ? 'one selected discovery' : ''].filter(Boolean).join(' and ')
 
   function invalidateContext() {
@@ -191,7 +197,8 @@ export default function AiProposals({ token, projectId, onClose, onReview }: {
     setProvider(next)
     setProviderKey('')
     setWorkspaceId('')
-    const mode = chosen?.managed_available ? 'managed' : chosen?.byok_available ? 'byok' : next === 'openai' && chatgpt?.enabled ? 'chatgpt' : 'byok'
+    setOpenCode(null)
+    const mode = next === 'opencode-go' ? 'opencode' : chosen?.managed_available ? 'managed' : chosen?.byok_available ? 'byok' : next === 'openai' && chatgpt?.enabled ? 'chatgpt' : 'byok'
     setCredentialMode(mode)
     setModel(mode === 'chatgpt' ? '' : chosen?.models[0] ?? '')
   }
@@ -295,6 +302,7 @@ export default function AiProposals({ token, projectId, onClose, onReview }: {
     if (credentialMode === 'managed' && !selectedProvider?.managed_available) { setRequestError('Managed access is unavailable on this server.'); return }
     if (credentialMode === 'byok' && (!selectedProvider?.byok_available || !providerKey.trim())) { setRequestError('Enter a provider key to use BYOK.'); return }
     if (credentialMode === 'chatgpt' && (!chatgpt?.enabled || !selectedProfile?.connected || !selectedProfile.sharing || chatgpt.active_profile_id !== selectedProfileId)) { setRequestError('Connect and select a ChatGPT account that can share requests.'); return }
+    if (credentialMode === 'opencode' && (!openCode?.connected || openCodeBusy)) { setRequestError('Connect your OpenCode Go subscription and choose a model.'); return }
 
     const abort = new AbortController()
     controller.current = abort
@@ -343,13 +351,15 @@ export default function AiProposals({ token, projectId, onClose, onReview }: {
               <div className="ai-settings">
                 <div className="ai-settings-heading"><KeyRound size={17} /><strong>Generation settings</strong></div>
                 <label className="field-label" htmlFor="ai-provider">Provider</label>
-                <select id="ai-provider" value={provider} onChange={event => changeProvider(event.target.value as AiProvider)}>{providers.map(item => <option key={item.provider} value={item.provider} disabled={!item.models.length && !(item.provider === 'openai' && chatgpt?.enabled)}>{providerName(item.provider)}{!item.models.length && !(item.provider === 'openai' && chatgpt?.enabled) ? ' (unavailable)' : ''}</option>)}</select>
+                <select id="ai-provider" value={provider} onChange={event => changeProvider(event.target.value as AiProvider)}>{providers.map(item => <option key={item.provider} value={item.provider} disabled={!item.models.length && item.provider !== 'opencode-go' && !(item.provider === 'openai' && chatgpt?.enabled)}>{providerName(item.provider)}{!item.models.length && item.provider !== 'opencode-go' && !(item.provider === 'openai' && chatgpt?.enabled) ? ' (unavailable)' : ''}</option>)}</select>
                 <div className="field-label ai-access-label">Access mode</div>
                 <div className="ai-mode-options">
+                  {provider === 'opencode-go' && <label className="chosen"><input type="radio" name="credential-mode" value="opencode" checked readOnly /><span><strong>Go / Go Plus subscription</strong><small>Use the local OpenCode connection</small></span></label>}
                   {selectedProvider?.managed_available && selectedProvider.models.length > 0 && <label className={credentialMode === 'managed' ? 'chosen' : ''}><input type="radio" name="credential-mode" value="managed" checked={credentialMode === 'managed'} onChange={() => changeMode('managed')} /><span><strong>Managed</strong><small>Server configured key</small></span></label>}
                   {selectedProvider?.byok_available && selectedProvider.models.length > 0 && <label className={credentialMode === 'byok' ? 'chosen' : ''}><input type="radio" name="credential-mode" value="byok" checked={credentialMode === 'byok'} onChange={() => changeMode('byok')} /><span><strong>Bring your own key</strong><small>For this request only</small></span></label>}
                   {provider === 'openai' && chatgpt?.enabled && <label className={credentialMode === 'chatgpt' ? 'chosen' : ''}><input type="radio" name="credential-mode" value="chatgpt" checked={credentialMode === 'chatgpt'} onChange={() => changeMode('chatgpt')} /><span><strong>ChatGPT subscription</strong><small>Use a connected account</small></span></label>}
                 </div>
+                {credentialMode === 'opencode' && <OpenCodeConnection key={token} token={token} disabled={generating} onBusy={setOpenCodeBusy} onStatus={status => { invalidateContext(); setOpenCode(status); setModel('') }} />}
                 {credentialMode === 'chatgpt' && chatgpt?.enabled && <div className="ai-chatgpt">
                   <p>Use your ChatGPT plan for proposals. Connect in your browser to authorize requests from this local app; no API key is needed.</p>
                   {chatgpt.profiles.length > 0 && <><label className="field-label" htmlFor="ai-chatgpt-account">Account</label><select id="ai-chatgpt-account" value={selectedProfileId} disabled={chatgptBusy || loginPending} onChange={event => { invalidateContext(); selectedProfileIdRef.current = event.target.value; setSelectedProfileId(event.target.value); setChatgptError(''); setChatgptNotice('') }}><option value="">Choose an account</option>{chatgpt.profiles.map(profile => <option key={profile.id} value={profile.id}>{accountName(profile)}{profile.connected ? '' : ' (disconnected)'}</option>)}</select></>}
@@ -364,8 +374,8 @@ export default function AiProposals({ token, projectId, onClose, onReview }: {
                   <a href="https://chatgpt.com/settings/usage" target="_blank" rel="noopener noreferrer">Manage usage <ExternalLink size={12} /></a>
                 </div>}
                 <label className="field-label" htmlFor="ai-model">Model</label>
-                <select id="ai-model" value={model} disabled={credentialMode === 'chatgpt' && (!selectedProfile?.connected || !selectedProfile.sharing || chatgpt?.active_profile_id !== selectedProfileId || chatgptModelsLoading)} onChange={event => { invalidateContext(); setModel(event.target.value) }}>
-                  {credentialMode === 'chatgpt' ? <><option value="">{chatgptModelsLoading ? 'Loading models…' : 'Choose a model'}</option>{chatgptModels.map(item => <option key={item.slug} value={item.slug}>{item.display_name || item.slug}</option>)}</> : selectedProvider?.models.map(item => <option key={item} value={item}>{item}</option>)}
+                <select id="ai-model" value={model} disabled={credentialMode === 'opencode' ? !openCode?.connected || openCodeBusy : credentialMode === 'chatgpt' && (!selectedProfile?.connected || !selectedProfile.sharing || chatgpt?.active_profile_id !== selectedProfileId || chatgptModelsLoading)} onChange={event => { invalidateContext(); setModel(event.target.value) }}>
+                  {credentialMode === 'opencode' ? <><option value="">{openCodeBusy ? 'Loading models…' : 'Choose a Go model'}</option>{openCode?.models.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</> : credentialMode === 'chatgpt' ? <><option value="">{chatgptModelsLoading ? 'Loading models…' : 'Choose a model'}</option>{chatgptModels.map(item => <option key={item.slug} value={item.slug}>{item.display_name || item.slug}</option>)}</> : selectedProvider?.models.map(item => <option key={item} value={item}>{item}</option>)}
                 </select>
                 {credentialMode === 'chatgpt' && selectedProfile?.connected && !selectedProfile.sharing && <p className="ai-key-note">Reconnect this account to authorize sharing requests.</p>}
                 {credentialMode === 'chatgpt' && selectedProfile?.connected && selectedProfile.sharing && chatgpt?.active_profile_id !== selectedProfileId && <p className="ai-key-note">Choose “Use this account” to load its models.</p>}

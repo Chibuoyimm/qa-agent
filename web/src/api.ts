@@ -140,8 +140,8 @@ export const emptyScenario = (): ScenarioInput => ({
   steps: [{ action: 'navigate', path: '/' }, { action: 'assert_visible', test_id: '' }],
 })
 
-export type AiProvider = 'openai' | 'anthropic' | 'google'
-export const providerName = (provider: AiProvider): string => ({ openai: 'OpenAI', anthropic: 'Anthropic', google: 'Google Gemini' })[provider]
+export type AiProvider = 'openai' | 'anthropic' | 'google' | 'opencode-go'
+export const providerName = (provider: AiProvider): string => ({ openai: 'OpenAI', anthropic: 'Anthropic', google: 'Google Gemini', 'opencode-go': 'OpenCode Go' })[provider]
 
 export type AiProviderConfig = {
   provider: AiProvider
@@ -157,6 +157,13 @@ export type AiConfig = {
   managed_available: boolean
   byok_available: boolean
   chatgpt?: ChatGptStatus
+  opencode_enabled?: boolean
+}
+
+export type OpenCodeStatus = {
+  enabled: boolean
+  connected: boolean
+  models: { id: string; name: string }[]
 }
 
 export type ChatGptProfile = {

@@ -48,6 +48,8 @@ jobs:
         run: npm ci
       - name: Check Go formatting
         run: test -z "$(gofmt -l cmd internal migrations)"
+      - name: Install pinned OpenCode runtime for synthetic integration
+        run: node scripts/install-opencode.mjs
       - name: Test Go against PostgreSQL
         run: go test -race ./... && go vet ./...
       - name: Check browser worker and synthetic sample
@@ -72,3 +74,4 @@ jobs:
             artifacts/integration-*/chatgpt-subscription-*.png
             artifacts/integration-*/anthropic-provider-*.png
             artifacts/integration-*/google-provider-*.png
+            artifacts/integration-*/opencode-provider-*.png

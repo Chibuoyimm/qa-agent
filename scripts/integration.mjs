@@ -9,6 +9,7 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { verifyChatGPTUI } from './chatgpt-ui-proof.mjs';
 import { verifyProvidersUI } from './providers-ui-proof.mjs';
+import { verifyOpenCodeUI } from './opencode-ui-proof.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const key = `${Date.now()}-${randomBytes(3).toString('hex')}`;
@@ -83,6 +84,7 @@ try {
     QA_TEST_EMAIL: 'demo@example.test', QA_TEST_PASSWORD: 'pass1234', QA_WORKER_ID: 'integration-worker',
     QA_OPENAI_MODELS: '', QA_OPENAI_API_KEY: '', QA_CHATGPT_ENABLED: 'false',
     QA_ANTHROPIC_MODELS: '', QA_ANTHROPIC_API_KEY: '', QA_ANTHROPIC_WORKSPACE_ID: '', QA_GEMINI_MODELS: '', QA_GEMINI_API_KEY: '',
+    QA_OPENCODE_ENABLED: 'false',
   };
   let server = await start('api', resolve(evidence, 'server'), [], env);
   const good = await start('sample-healthy', process.execPath, ['sample/server.js'], { ...env, PORT: String(goodPort), QA_SAMPLE_DEFECT: '0' });
@@ -399,6 +401,7 @@ try {
     observations.push({ name: 'AI draft review and approval UI (simulated generation, real persistence)', status: 'passed' });
     observations.push(await verifyChatGPTUI(page, api, healthy.project.id, templates[0], evidence));
     observations.push(await verifyProvidersUI(page, api, healthy.project.id, faulty.project.id, templates[0], waitRun, evidence));
+    observations.push(await verifyOpenCodeUI(page, api, healthy.project.id, faulty.project.id, templates[0], waitRun, evidence));
     assert.deepEqual(errors, [], 'AI proposal flow must not throw browser errors');
     assert.equal(await page.evaluate(() => localStorage.length + sessionStorage.length), 0, 'Operator token must not enter browser storage');
     await page.reload();
