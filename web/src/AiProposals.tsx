@@ -3,7 +3,7 @@ import {
   AlertCircle, ArrowRight, Check, CircleHelp, ExternalLink, Info, KeyRound, LoaderCircle,
   LockKeyhole, RefreshCw, ShieldCheck, Sparkles, Square, X,
 } from 'lucide-react'
-import { api, type AiConfig, type AiProposalResponse, type ChatGptLogin, type ChatGptModel, type ChatGptProfile, type ChatGptStatus, type ScenarioInput } from './api'
+import { api, providerName, type AiProvider, type AiConfig, type AiProposalResponse, type ChatGptLogin, type ChatGptModel, type ChatGptProfile, type ChatGptStatus, type ScenarioInput } from './api'
 import { SnapshotBrowser } from './RepositorySnapshots'
 import { DiscoveryBrowser } from './Discoveries'
 
@@ -27,6 +27,8 @@ export default function AiProposals({ token, projectId, onClose, onReview }: {
   const [config, setConfig] = useState<AiConfig | null>(null)
   const [configLoading, setConfigLoading] = useState(true)
   const [configError, setConfigError] = useState('')
+  const [provider, setProvider] = useState<AiProvider>('openai')
+  const [workspaceId, setWorkspaceId] = useState('')
   const [model, setModel] = useState('')
   const [credentialMode, setCredentialMode] = useState<CredentialMode>('managed')
   const [chatgpt, setChatgpt] = useState<ChatGptStatus | null>(null)
@@ -52,6 +54,9 @@ export default function AiProposals({ token, projectId, onClose, onReview }: {
   const identity = useRef(0)
   const chatgptRef = useRef<ChatGptStatus | null>(null)
   const selectedProfileIdRef = useRef('')
+  const providers = config?.providers ?? (config ? [{ provider: config.provider, models: config.models, managed_available: config.managed_available, byok_available: config.byok_available }] : [])
+  const selectedProvider = providers.find(item => item.provider === provider)
+  const recipient = providerName(provider)
   const selectedProfile = chatgpt?.profiles.find(profile => profile.id === selectedProfileId)
   const loginPending = chatgpt?.login?.status === 'pending'
 
@@ -91,9 +96,15 @@ export default function AiProposals({ token, projectId, onClose, onReview }: {
       const initialProfileId = value.chatgpt?.active_profile_id || value.chatgpt?.profiles.find(profile => profile.connected)?.id || ''
       selectedProfileIdRef.current = initialProfileId
       setSelectedProfileId(initialProfileId)
-      const mode = value.managed_available && value.models.length ? 'managed' : value.byok_available && value.models.length ? 'byok' : value.chatgpt?.enabled ? 'chatgpt' : 'managed'
+      const choices = value.providers ?? [value]
+      const first = choices.find(item => item.models.length && (item.managed_available || item.byok_available))
+      const initial = first ?? choices.find(item => item.provider === 'openai')
+      setProvider(initial?.provider ?? 'openai')
+      const mode = initial?.managed_available ? 'managed' : initial?.byok_available ? 'byok' : value.chatgpt?.enabled ? 'chatgpt' : 'managed'
       setCredentialMode(mode)
-      setModel(mode === 'chatgpt' ? '' : value.models[0] ?? '')
+      setProviderKey('')
+      setWorkspaceId('')
+      setModel(mode === 'chatgpt' ? '' : initial?.models[0] ?? '')
     }).catch(error => {
       if (!abort.signal.aborted) setConfigError(error instanceof Error ? error.message : 'Could not load AI configuration.')
     }).finally(() => { if (!abort.signal.aborted) setConfigLoading(false) })
@@ -147,9 +158,9 @@ export default function AiProposals({ token, projectId, onClose, onReview }: {
     return () => { window.clearInterval(timer); abort.abort() }
   }, [token, projectId, chatgpt?.login?.id, chatgpt?.login?.status])
 
-  const configured = Boolean(config && ((config.models.length > 0 && (config.managed_available || config.byok_available)) || config.chatgpt?.enabled))
-  const chosenModelAvailable = credentialMode === 'chatgpt' ? chatgptModels.some(item => item.slug === model) : Boolean(config?.models.includes(model))
-  const credentialReady = credentialMode === 'chatgpt' ? Boolean(selectedProfile?.connected && selectedProfile.sharing && selectedProfileId && chatgpt?.active_profile_id === selectedProfileId && !chatgptModelsLoading) : credentialMode === 'managed' ? Boolean(config?.managed_available) : Boolean(config?.byok_available && providerKey.trim())
+  const configured = Boolean(config && ((providers.some(item => item.models.length > 0 && (item.managed_available || item.byok_available))) || config.chatgpt?.enabled))
+  const chosenModelAvailable = credentialMode === 'chatgpt' ? chatgptModels.some(item => item.slug === model) : Boolean(selectedProvider?.models.includes(model))
+  const credentialReady = credentialMode === 'chatgpt' ? Boolean(selectedProfile?.connected && selectedProfile.sharing && selectedProfileId && chatgpt?.active_profile_id === selectedProfileId && !chatgptModelsLoading) : credentialMode === 'managed' ? Boolean(selectedProvider?.managed_available) : Boolean(selectedProvider?.byok_available && providerKey.trim())
   const canGenerate = configured && !generating && !chatgptBusy && (credentialMode !== 'chatgpt' || !loginPending) && Boolean(prompt.trim() && (context.trim() || snapshotIds.length || discoveryId) && chosenModelAvailable && consent && credentialReady)
   const selectedSources = [snapshotIds.length ? `${snapshotIds.length} selected repository ${snapshotIds.length === 1 ? 'snapshot' : 'snapshots'}` : '', discoveryId ? 'one selected discovery' : ''].filter(Boolean).join(' and ')
 
@@ -167,7 +178,22 @@ export default function AiProposals({ token, projectId, onClose, onReview }: {
     invalidateContext()
     setRequestError('')
     setCredentialMode(mode)
-    setModel(mode === 'chatgpt' ? '' : config?.models[0] ?? '')
+    setProviderKey('')
+    setWorkspaceId('')
+    setModel(mode === 'chatgpt' ? '' : selectedProvider?.models[0] ?? '')
+  }
+
+  function changeProvider(next: AiProvider) {
+    if (next === provider) return
+    const chosen = providers.find(item => item.provider === next)
+    invalidateContext()
+    setRequestError('')
+    setProvider(next)
+    setProviderKey('')
+    setWorkspaceId('')
+    const mode = chosen?.managed_available ? 'managed' : chosen?.byok_available ? 'byok' : next === 'openai' && chatgpt?.enabled ? 'chatgpt' : 'byok'
+    setCredentialMode(mode)
+    setModel(mode === 'chatgpt' ? '' : chosen?.models[0] ?? '')
   }
 
   async function connectChatgpt(profileId?: string) {
@@ -265,24 +291,26 @@ export default function AiProposals({ token, projectId, onClose, onReview }: {
     if (!chosenModelAvailable) { setRequestError('Choose an available model.'); return }
     if (!prompt.trim() || prompt.length > 4000) { setRequestError('Testing request must be 1–4000 characters.'); return }
     if ((!context.trim() && snapshotIds.length === 0 && !discoveryId) || context.length > 60000) { setRequestError('Add application context, a reviewed repository snapshot, or reviewed discovery observations.'); return }
-    if (!consent) { setRequestError('Confirm consent to send these fields to OpenAI.'); return }
-    if (credentialMode === 'managed' && !config.managed_available) { setRequestError('Managed access is unavailable on this server.'); return }
-    if (credentialMode === 'byok' && (!config.byok_available || !providerKey.trim())) { setRequestError('Enter a provider key to use BYOK.'); return }
+    if (!consent) { setRequestError(`Confirm consent to send these fields to ${recipient}.`); return }
+    if (credentialMode === 'managed' && !selectedProvider?.managed_available) { setRequestError('Managed access is unavailable on this server.'); return }
+    if (credentialMode === 'byok' && (!selectedProvider?.byok_available || !providerKey.trim())) { setRequestError('Enter a provider key to use BYOK.'); return }
     if (credentialMode === 'chatgpt' && (!chatgpt?.enabled || !selectedProfile?.connected || !selectedProfile.sharing || chatgpt.active_profile_id !== selectedProfileId)) { setRequestError('Connect and select a ChatGPT account that can share requests.'); return }
 
     const abort = new AbortController()
     controller.current = abort
     const currentRequest = ++requestNumber.current
     const transientKey = providerKey.trim()
+    const transientWorkspace = workspaceId.trim()
     setProviderKey('')
+    setWorkspaceId('')
     setGenerating(true)
     setResponse(null)
     try {
       const result = await api<AiProposalResponse>(token, `/api/projects/${encodeURIComponent(projectId)}/proposals`, {
         method: 'POST',
         signal: abort.signal,
-        headers: credentialMode === 'byok' ? { 'X-QA-Provider-Key': transientKey } : undefined,
-        body: JSON.stringify({ prompt: prompt.trim(), context: context.trim(), model, credential_mode: credentialMode, ...(credentialMode === 'chatgpt' ? { chatgpt_profile_id: selectedProfileId } : {}), consent: true, repository_snapshot_ids: snapshotIds, ...(discoveryId ? { discovery_id: discoveryId } : {}) }),
+        headers: credentialMode === 'byok' ? { 'X-QA-Provider-Key': transientKey, ...(provider === 'anthropic' && transientWorkspace ? { 'X-QA-Anthropic-Workspace': transientWorkspace } : {}) } : undefined,
+        body: JSON.stringify({ provider, prompt: prompt.trim(), context: context.trim(), model, credential_mode: credentialMode, ...(credentialMode === 'chatgpt' ? { chatgpt_profile_id: selectedProfileId } : {}), consent: true, repository_snapshot_ids: snapshotIds, ...(discoveryId ? { discovery_id: discoveryId } : {}) }),
       })
       if (currentRequest === requestNumber.current && !abort.signal.aborted) setResponse(result)
     } catch (error) {
@@ -309,16 +337,18 @@ export default function AiProposals({ token, projectId, onClose, onReview }: {
     <div className="ai-repository-section"><div className="ai-repository-heading"><div><div className="eyebrow">OPTIONAL BROWSER CONTEXT</div><h3>Review discovery observations</h3><p>Select one completed discovery. Observed text must be checked against your requirements before it becomes a test expectation.</p></div></div><DiscoveryBrowser token={token} projectId={projectId} selectedId={discoveryId} onSelectionChange={id => { setDiscoveryId(id); invalidateContext() }} /></div>
     {configLoading ? <div className="ai-config-state"><LoaderCircle size={18} className="spin" />Checking model availability…</div>
       : configError ? <div className="error-banner"><AlertCircle size={17} /><span>Could not load AI configuration: {configError}</span></div>
-        : !config || !configured ? <div className="ai-unavailable"><LockKeyhole size={22} /><div><strong>Proposal generation is unavailable</strong><p>{config?.models.length === 0 ? 'No model IDs are configured in QA_OPENAI_MODELS.' : 'Neither managed access nor BYOK is enabled on this server.'} Ask the operator to configure access, then reopen this panel.</p></div></div>
+        : !config || !configured ? <div className="ai-unavailable"><LockKeyhole size={22} /><div><strong>Proposal generation is unavailable</strong><p>No model access is configured on this server. Ask the operator to configure access, then reopen this panel.</p></div></div>
           : <form onSubmit={event => void generate(event)}>
-            <div className="ai-form-grid"><div className="ai-main-fields"><label className="field-label" htmlFor="ai-request">Testing request <span>*</span></label><textarea id="ai-request" maxLength={4000} rows={4} placeholder="What business behaviour should be checked? What could go wrong?" value={prompt} onChange={event => { setPrompt(event.target.value); setConsent(false) }} /><div className="input-count">{prompt.length} / 4,000</div><label className="field-label" htmlFor="ai-context">Application context <span className={selectedSources ? 'optional' : undefined}>{selectedSources ? 'optional with reviewed context' : '*'}</span></label><textarea id="ai-context" maxLength={60000} rows={9} placeholder={'Paste requirements, known paths, fixture rules, and independent expected values. Observed app text and repository code alone may not reveal the intended business outcome.'} value={context} onChange={event => { setContext(event.target.value); setConsent(false) }} /><div className="input-count">{context.length.toLocaleString()} / 60,000</div></div>
+            <div className="ai-form-grid"><div className="ai-main-fields"><label className="field-label" htmlFor="ai-request">Testing request <span>*</span></label><textarea id="ai-request" maxLength={4000} rows={4} placeholder="What business behaviour should be checked? What could go wrong?" value={prompt} onChange={event => { setPrompt(event.target.value); invalidateContext() }} /><div className="input-count">{prompt.length} / 4,000</div><label className="field-label" htmlFor="ai-context">Application context <span className={selectedSources ? 'optional' : undefined}>{selectedSources ? 'optional with reviewed context' : '*'}</span></label><textarea id="ai-context" maxLength={60000} rows={9} placeholder={'Paste requirements, known paths, fixture rules, and independent expected values. Observed app text and repository code alone may not reveal the intended business outcome.'} value={context} onChange={event => { setContext(event.target.value); invalidateContext() }} /><div className="input-count">{context.length.toLocaleString()} / 60,000</div></div>
               <div className="ai-settings">
                 <div className="ai-settings-heading"><KeyRound size={17} /><strong>Generation settings</strong></div>
+                <label className="field-label" htmlFor="ai-provider">Provider</label>
+                <select id="ai-provider" value={provider} onChange={event => changeProvider(event.target.value as AiProvider)}>{providers.map(item => <option key={item.provider} value={item.provider} disabled={!item.models.length && !(item.provider === 'openai' && chatgpt?.enabled)}>{providerName(item.provider)}{!item.models.length && !(item.provider === 'openai' && chatgpt?.enabled) ? ' (unavailable)' : ''}</option>)}</select>
                 <div className="field-label ai-access-label">Access mode</div>
                 <div className="ai-mode-options">
-                  {config.managed_available && config.models.length > 0 && <label className={credentialMode === 'managed' ? 'chosen' : ''}><input type="radio" name="credential-mode" value="managed" checked={credentialMode === 'managed'} onChange={() => changeMode('managed')} /><span><strong>Managed</strong><small>Server configured key</small></span></label>}
-                  {config.byok_available && config.models.length > 0 && <label className={credentialMode === 'byok' ? 'chosen' : ''}><input type="radio" name="credential-mode" value="byok" checked={credentialMode === 'byok'} onChange={() => changeMode('byok')} /><span><strong>Bring your own key</strong><small>For this request only</small></span></label>}
-                  {chatgpt?.enabled && <label className={credentialMode === 'chatgpt' ? 'chosen' : ''}><input type="radio" name="credential-mode" value="chatgpt" checked={credentialMode === 'chatgpt'} onChange={() => changeMode('chatgpt')} /><span><strong>ChatGPT subscription</strong><small>Use a connected account</small></span></label>}
+                  {selectedProvider?.managed_available && selectedProvider.models.length > 0 && <label className={credentialMode === 'managed' ? 'chosen' : ''}><input type="radio" name="credential-mode" value="managed" checked={credentialMode === 'managed'} onChange={() => changeMode('managed')} /><span><strong>Managed</strong><small>Server configured key</small></span></label>}
+                  {selectedProvider?.byok_available && selectedProvider.models.length > 0 && <label className={credentialMode === 'byok' ? 'chosen' : ''}><input type="radio" name="credential-mode" value="byok" checked={credentialMode === 'byok'} onChange={() => changeMode('byok')} /><span><strong>Bring your own key</strong><small>For this request only</small></span></label>}
+                  {provider === 'openai' && chatgpt?.enabled && <label className={credentialMode === 'chatgpt' ? 'chosen' : ''}><input type="radio" name="credential-mode" value="chatgpt" checked={credentialMode === 'chatgpt'} onChange={() => changeMode('chatgpt')} /><span><strong>ChatGPT subscription</strong><small>Use a connected account</small></span></label>}
                 </div>
                 {credentialMode === 'chatgpt' && chatgpt?.enabled && <div className="ai-chatgpt">
                   <p>Use your ChatGPT plan for proposals. Connect in your browser to authorize requests from this local app; no API key is needed.</p>
@@ -335,17 +365,17 @@ export default function AiProposals({ token, projectId, onClose, onReview }: {
                 </div>}
                 <label className="field-label" htmlFor="ai-model">Model</label>
                 <select id="ai-model" value={model} disabled={credentialMode === 'chatgpt' && (!selectedProfile?.connected || !selectedProfile.sharing || chatgpt?.active_profile_id !== selectedProfileId || chatgptModelsLoading)} onChange={event => { invalidateContext(); setModel(event.target.value) }}>
-                  {credentialMode === 'chatgpt' ? <><option value="">{chatgptModelsLoading ? 'Loading models…' : 'Choose a model'}</option>{chatgptModels.map(item => <option key={item.slug} value={item.slug}>{item.display_name || item.slug}</option>)}</> : config.models.map(item => <option key={item} value={item}>{item}</option>)}
+                  {credentialMode === 'chatgpt' ? <><option value="">{chatgptModelsLoading ? 'Loading models…' : 'Choose a model'}</option>{chatgptModels.map(item => <option key={item.slug} value={item.slug}>{item.display_name || item.slug}</option>)}</> : selectedProvider?.models.map(item => <option key={item} value={item}>{item}</option>)}
                 </select>
                 {credentialMode === 'chatgpt' && selectedProfile?.connected && !selectedProfile.sharing && <p className="ai-key-note">Reconnect this account to authorize sharing requests.</p>}
                 {credentialMode === 'chatgpt' && selectedProfile?.connected && selectedProfile.sharing && chatgpt?.active_profile_id !== selectedProfileId && <p className="ai-key-note">Choose “Use this account” to load its models.</p>}
                 {credentialMode === 'chatgpt' && selectedProfile?.connected && selectedProfile.sharing && chatgpt?.active_profile_id === selectedProfileId && !chatgptModelsLoading && chatgptModels.length === 0 && <p className="ai-key-note">No models are available for this account.</p>}
-                {credentialMode === 'byok' && <><label className="field-label" htmlFor="ai-provider-key">OpenAI API key</label><input id="ai-provider-key" type="password" autoComplete="off" placeholder="Enter key for this request" value={providerKey} onChange={event => setProviderKey(event.target.value)} /><p className="ai-key-note"><LockKeyhole size={13} />Cleared on submit. Never stored in browser storage.</p></>}
+                {credentialMode === 'byok' && <><label className="field-label" htmlFor="ai-provider-key">{recipient} API key</label><input id="ai-provider-key" type="password" autoComplete="off" placeholder="Enter key for this request" value={providerKey} onChange={event => { setProviderKey(event.target.value); invalidateContext() }} />{provider === 'anthropic' && <><label className="field-label" htmlFor="ai-workspace">Anthropic workspace ID <span className="optional">optional</span></label><input id="ai-workspace" type="text" autoComplete="off" placeholder="wrkspc_…" value={workspaceId} onChange={event => { setWorkspaceId(event.target.value); invalidateContext() }} /><p className="ai-workspace-note">Required for a key that is not scoped to one workspace.</p></>}<p className="ai-key-note"><LockKeyhole size={13} />Cleared on submit. Never stored in browser storage.</p></>}
               </div></div>
-            <label className="ai-consent"><input type="checkbox" checked={consent} onChange={event => setConsent(event.target.checked)} /><span>{selectedSources ? `I have reviewed the selected context and agree to send my testing request, application context, and ${selectedSources} to OpenAI to generate proposals.` : 'I agree to send my testing request and application context to OpenAI to generate proposals.'}</span></label>
+            <label className="ai-consent"><input type="checkbox" checked={consent} onChange={event => setConsent(event.target.checked)} /><span>{selectedSources ? `I have reviewed the selected context and agree to send my testing request, application context, and ${selectedSources} to ${recipient} to generate proposals.` : `I agree to send my testing request and application context to ${recipient} to generate proposals.`}</span></label>
             {requestError && <div className="error-banner"><AlertCircle size={17} /><span>{requestError}</span></div>}
             <div className="ai-actions"><span><ShieldCheck size={16} />Drafts remain unapproved and unsaved until you review them.</span>{generating ? <button className="button button-danger" type="button" onClick={cancel}><Square size={14} />Cancel request</button> : <button className="button button-primary" type="submit" disabled={!canGenerate}><Sparkles size={16} />Generate proposals</button>}</div>
           </form>}
-    {response && <div className="ai-results"><div className="ai-results-head"><div><div className="eyebrow">PROPOSAL REVIEW</div><h3>{response.scenarios.length ? `${response.scenarios.length} draft ${response.scenarios.length === 1 ? 'scenario' : 'scenarios'}` : 'More context needed'}</h3><p>Generated with {response.model}. Review assertions against your own requirements before saving.</p>{response.discovery_id && <p>Discovery source: <code>{response.discovery_id}</code></p>}{response.repository_snapshots && response.repository_snapshots.length > 0 && <p>Repository sources: {response.repository_snapshots.map(item => `${item.repository} (${item.role}, ${item.commit_sha.slice(0, 12)})`).join(" · ")}</p>}</div><span className="ai-provider-badge"><Sparkles size={14} />{(response.credential_mode ?? credentialMode) === 'chatgpt' ? 'Using ChatGPT plan' : 'OpenAI'}</span></div><div className="ai-results-grid"><div className="ai-drafts">{response.scenarios.length ? response.scenarios.map((scenario, index) => <article className="ai-draft" key={`${index}-${scenario.name}`}><div className="ai-draft-label">DRAFT {String(index + 1).padStart(2, '0')} · UNAPPROVED</div><h4>{scenario.name}</h4>{scenario.description && <p>{scenario.description}</p>}<div className="expected"><span>PROPOSED OUTCOME</span><p>{scenario.expected_outcome}</p></div><div className="ai-draft-foot"><span>{scenario.steps.length} browser steps</span><button className="link-button" onClick={() => onReview({ ...scenario, approved: false })}>Review in editor <ArrowRight size={15} /></button></div></article>) : <div className="ai-no-drafts"><CircleHelp size={20} /><strong>No scenarios proposed</strong><p>The supplied context was not enough to form a check. Answer the questions, add more facts, and generate again.</p></div>}</div><aside className="ai-notes"><div className="ai-note-section"><h4><CircleHelp size={17} />Questions <span>{response.questions.length}</span></h4>{response.questions.length ? <ol>{response.questions.map((item, index) => <li key={index}>{item}</li>)}</ol> : <p>No open questions returned.</p>}</div><div className="ai-note-section"><h4><Info size={17} />Assumptions <span>{response.assumptions.length}</span></h4>{response.assumptions.length ? <ol>{response.assumptions.map((item, index) => <li key={index}>{item}</li>)}</ol> : <p>No assumptions returned.</p>}</div></aside></div><div className="ai-results-foot"><Check size={15} />Suggestions enter coverage only when you save them in the editor.<button type="button" onClick={() => { setResponse(null); setRequestError('') }}><RefreshCw size={14} />Start over</button></div></div>}
+    {response && <div className="ai-results"><div className="ai-results-head"><div><div className="eyebrow">PROPOSAL REVIEW</div><h3>{response.scenarios.length ? `${response.scenarios.length} draft ${response.scenarios.length === 1 ? 'scenario' : 'scenarios'}` : 'More context needed'}</h3><p>Generated with {response.model}. Review assertions against your own requirements before saving.</p>{response.discovery_id && <p>Discovery source: <code>{response.discovery_id}</code></p>}{response.repository_snapshots && response.repository_snapshots.length > 0 && <p>Repository sources: {response.repository_snapshots.map(item => `${item.repository} (${item.role}, ${item.commit_sha.slice(0, 12)})`).join(" · ")}</p>}</div><span className="ai-provider-badge"><Sparkles size={14} />{(response.credential_mode ?? credentialMode) === 'chatgpt' ? 'Using ChatGPT plan' : providerName(response.provider)}</span></div><div className="ai-results-grid"><div className="ai-drafts">{response.scenarios.length ? response.scenarios.map((scenario, index) => <article className="ai-draft" key={`${index}-${scenario.name}`}><div className="ai-draft-label">DRAFT {String(index + 1).padStart(2, '0')} · UNAPPROVED</div><h4>{scenario.name}</h4>{scenario.description && <p>{scenario.description}</p>}<div className="expected"><span>PROPOSED OUTCOME</span><p>{scenario.expected_outcome}</p></div><div className="ai-draft-foot"><span>{scenario.steps.length} browser steps</span><button className="link-button" onClick={() => onReview({ ...scenario, approved: false })}>Review in editor <ArrowRight size={15} /></button></div></article>) : <div className="ai-no-drafts"><CircleHelp size={20} /><strong>No scenarios proposed</strong><p>The supplied context was not enough to form a check. Answer the questions, add more facts, and generate again.</p></div>}</div><aside className="ai-notes"><div className="ai-note-section"><h4><CircleHelp size={17} />Questions <span>{response.questions.length}</span></h4>{response.questions.length ? <ol>{response.questions.map((item, index) => <li key={index}>{item}</li>)}</ol> : <p>No open questions returned.</p>}</div><div className="ai-note-section"><h4><Info size={17} />Assumptions <span>{response.assumptions.length}</span></h4>{response.assumptions.length ? <ol>{response.assumptions.map((item, index) => <li key={index}>{item}</li>)}</ol> : <p>No assumptions returned.</p>}</div></aside></div><div className="ai-results-foot"><Check size={15} />Suggestions enter coverage only when you save them in the editor.<button type="button" onClick={() => { setResponse(null); setRequestError('') }}><RefreshCw size={14} />Start over</button></div></div>}
   </section>
 }

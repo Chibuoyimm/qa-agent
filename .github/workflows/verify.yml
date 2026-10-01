@@ -70,3 +70,5 @@ jobs:
             artifacts/integration-*/release-desktop.png
             artifacts/integration-*/release-mobile.png
             artifacts/integration-*/chatgpt-subscription-*.png
+            artifacts/integration-*/anthropic-provider-*.png
+            artifacts/integration-*/google-provider-*.png

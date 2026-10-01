@@ -140,7 +140,18 @@ export const emptyScenario = (): ScenarioInput => ({
   steps: [{ action: 'navigate', path: '/' }, { action: 'assert_visible', test_id: '' }],
 })
 
+export type AiProvider = 'openai' | 'anthropic' | 'google'
+export const providerName = (provider: AiProvider): string => ({ openai: 'OpenAI', anthropic: 'Anthropic', google: 'Google Gemini' })[provider]
+
+export type AiProviderConfig = {
+  provider: AiProvider
+  models: string[]
+  managed_available: boolean
+  byok_available: boolean
+}
+
 export type AiConfig = {
+  providers?: AiProviderConfig[]
   provider: 'openai'
   models: string[]
   managed_available: boolean
@@ -168,7 +179,7 @@ export type ChatGptModel = { slug: string; display_name: string }
 export type ChatGptLogin = { id: string; auth_url: string; expires_at: string }
 
 export type AiProposalResponse = {
-  provider: 'openai'
+  provider: AiProvider
   model: string
   credential_mode?: string
   chatgpt_profile_id?: string

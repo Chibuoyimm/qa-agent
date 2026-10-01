@@ -81,7 +81,7 @@ The GitHub Actions workflow runs the same checks on pushes and pull requests. No
 | `cmd/qa` | Release-pipeline client |
 | `internal/qa` | Typed scenarios, validation, persistence and run transitions |
 | `internal/httpapi` | Authenticated HTTP boundary |
-| `internal/planner` | OpenAI proposal generation and output validation |
+| `internal/planner` | OpenAI, Anthropic and Gemini proposal generation and output validation |
 | `migrations` | Embedded pilot schema; applied idempotently at startup |
 | `worker` | Playwright execution, leases and local evidence |
 | `web` | Project, coverage, scenario and result workspace |
@@ -107,9 +107,9 @@ bin/qa discover --project PROJECT_ID --start-path /dashboard \
 
 For local ChatGPT subscription access, set `QA_CHATGPT_ENABLED=true`, restart the API, and choose **ChatGPT subscription → Continue with ChatGPT** in the proposal panel. Models come from the connected account; no API key is needed. See [connection setup, limits, and verification](docs/chatgpt-subscription.md).
 
-Configure `QA_OPENAI_MODELS` with the exact Responses-compatible model IDs you intend to use and restart the API. For managed credentials, also configure `QA_OPENAI_API_KEY` on the server. With models configured, BYOK is available using a key supplied transiently in the web form. Both paths use the same provider implementation; this pilot does not implement credit purchases or customer billing.
+Configure the model allowlist for each provider you want to use: `QA_OPENAI_MODELS`, `QA_ANTHROPIC_MODELS`, or `QA_GEMINI_MODELS`. Use exact model IDs supporting the documented structured-output format and restart the API. Choose the provider and model in the form, then supply an API key for that request. Anthropic also has an optional workspace ID field for keys that require it. Server-managed access uses the corresponding `QA_OPENAI_API_KEY`, `QA_ANTHROPIC_API_KEY`, or `QA_GEMINI_API_KEY`; a managed multi-workspace Anthropic key also uses `QA_ANTHROPIC_WORKSPACE_ID`. Both paths use the same provider implementation; this pilot does not implement credit purchases or customer billing.
 
-In the scenario workspace, choose **Ask AI to propose**, describe the testing request, and paste relevant application context. [Sample app context](docs/sample-app-context.md) provides a synthetic example. The form asks for explicit consent to send that material to OpenAI. Only explicitly selected repository snapshots and discovery observations are included; credentials are not model context. Draft scenarios, questions and assumptions appear for review, and no generated scenario is approved or executed automatically. Keys stay out of persistence and logs; use HTTPS if accessing the API beyond localhost.
+In the scenario workspace, choose **Ask AI to propose**, describe the testing request, and paste relevant application context. [Sample app context](docs/sample-app-context.md) provides a synthetic example. The form asks for explicit consent to send that material to the selected provider. Only explicitly selected repository snapshots and discovery observations are included; credentials are not model context. Draft scenarios, questions and assumptions appear for review, and no generated scenario is approved or executed automatically. Keys stay out of persistence and logs; use HTTPS if accessing the API beyond localhost.
 
 Proposal calls have a 90-second deadline and a two-call concurrency limit. API-key calls have a 6000-output-token cap; the subscription preview omits that unsupported field and bounds the response stream to 2 MiB. Provider errors, refusals and incomplete/invalid output are failures, not fabricated drafts. No automatic model retry occurs. See [the proposal contract](docs/ai-proposals.md) for details. Automated provider tests use a fake HTTP transport; the integration UI check simulates generation and saves through the real database. Live model quality and account/model access require a connected eligible ChatGPT account or a configured provider key, and are not established by those tests.
 
