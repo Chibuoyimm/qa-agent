@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Chibuoyimm/qa-agent/internal/chatgpt"
+	"github.com/Chibuoyimm/qa-agent/internal/opencode"
 	"github.com/Chibuoyimm/qa-agent/internal/qa"
 )
 
@@ -60,6 +61,7 @@ type ProviderConfig struct {
 type Config struct {
 	Providers        []ProviderConfig `json:"providers"`
 	ChatGPT          *chatgpt.Status  `json:"chatgpt,omitempty"`
+	OpenCodeEnabled  bool             `json:"opencode_enabled"`
 	Provider         string           `json:"provider"`
 	Models           []string         `json:"models"`
 	ManagedAvailable bool             `json:"managed_available"`
@@ -81,6 +83,7 @@ type Result struct {
 
 type Planner struct {
 	ChatGPT   *chatgpt.Client
+	OpenCode  *opencode.Client
 	providers []configuredProvider
 	client    *http.Client
 	slots     chan struct{}
@@ -220,6 +223,7 @@ func (p *Planner) Config() Config {
 		status := p.ChatGPT.Status()
 		cfg.ChatGPT = &status
 	}
+	cfg.OpenCodeEnabled = p.OpenCode != nil
 	return cfg
 }
 
@@ -247,6 +251,15 @@ func (p *Planner) Validate(in Input, byokKey string) error {
 		}
 		if in.ChatGPTProfileID == "" || in.Model == "" || len(in.Model) > 100 || strings.ContainsAny(in.Model, " \t\r\n") || byokKey != "" {
 			return fmt.Errorf("%w: select a ChatGPT account and model without an API key", ErrInvalid)
+		}
+		return nil
+	}
+	if in.CredentialMode == "opencode" {
+		if in.Provider != "opencode-go" || in.WorkspaceID != "" || in.ChatGPTProfileID != "" || byokKey != "" || !opencode.ValidModelID(in.Model) {
+			return fmt.Errorf("%w: OpenCode access requires a Go model without other provider credentials", ErrInvalid)
+		}
+		if p.OpenCode == nil {
+			return ErrUnavailable
 		}
 		return nil
 	}
@@ -359,6 +372,9 @@ func (p *Planner) Propose(ctx context.Context, in Input, byokKey string) (Result
 		if err == nil {
 			outputText, err = openAIOutput(response)
 		}
+	} else if in.CredentialMode == "opencode" {
+		openCodeInstructions := strings.TrimSuffix(instructions, "No tools or browsing are available.") + "Use only StructuredOutput to return the proposal. Files, shell, browsing, and other tools are unavailable."
+		outputText, err = p.OpenCode.Draft(providerCtx, in.Model, openCodeInstructions, "Testing request:\n"+in.Prompt+"\n\nApplication context:\n"+in.Context, p.schema)
 	} else {
 		configured, _ := p.provider(providerName) // Already validated above.
 		key, workspace := configured.managedKey, configured.workspaceID

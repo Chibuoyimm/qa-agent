@@ -14,6 +14,7 @@ import (
 
 	"github.com/Chibuoyimm/qa-agent/internal/chatgpt"
 	"github.com/Chibuoyimm/qa-agent/internal/httpapi"
+	"github.com/Chibuoyimm/qa-agent/internal/opencode"
 	"github.com/Chibuoyimm/qa-agent/internal/planner"
 	"github.com/Chibuoyimm/qa-agent/internal/qa"
 	"github.com/Chibuoyimm/qa-agent/internal/repository"
@@ -51,6 +52,13 @@ func run(logger *slog.Logger) error {
 	if subscription != nil {
 		defer subscription.Close()
 	}
+	openCode, err := configureOpenCode(addr)
+	if err != nil {
+		return err
+	}
+	if openCode != nil {
+		defer openCode.Close()
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	db, err := pgxpool.New(ctx, connection)
@@ -75,6 +83,7 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 	proposals.ChatGPT = subscription
+	proposals.OpenCode = openCode
 	server := &http.Server{
 		Addr:              addr,
 		Handler:           httpapi.New(qa.NewStore(db, allowed), proposals, repository.New(nil), apiToken, workerToken, logger).Handler(),
@@ -97,6 +106,33 @@ func run(logger *slog.Logger) error {
 		return <-shutdownErr
 	}
 	return err
+}
+
+func configureOpenCode(addr string) (*opencode.Client, error) {
+	enabled := os.Getenv("QA_OPENCODE_ENABLED")
+	if enabled == "" || enabled == "false" {
+		return nil, nil
+	}
+	if enabled != "true" {
+		return nil, errors.New("QA_OPENCODE_ENABLED must be true or false")
+	}
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil || net.ParseIP(host) == nil || !net.ParseIP(host).IsLoopback() {
+		return nil, errors.New("OpenCode Go access requires a loopback QA_LISTEN_ADDR")
+	}
+	binary := os.Getenv("QA_OPENCODE_BINARY")
+	if binary == "" {
+		return nil, errors.New("set QA_OPENCODE_BINARY to the verified OpenCode 1.18.34 binary")
+	}
+	directory := os.Getenv("QA_OPENCODE_STORAGE_DIR")
+	if directory == "" {
+		configDir, err := os.UserConfigDir()
+		if err != nil {
+			return nil, errors.New("set QA_OPENCODE_STORAGE_DIR to a protected local directory")
+		}
+		directory = filepath.Join(configDir, "qa-agent", "opencode-go")
+	}
+	return opencode.New(binary, directory)
 }
 
 func configureChatGPT(addr string) (*chatgpt.Client, error) {

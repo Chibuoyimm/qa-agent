@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Chibuoyimm/qa-agent/internal/chatgpt"
+	"github.com/Chibuoyimm/qa-agent/internal/opencode"
 	"github.com/Chibuoyimm/qa-agent/internal/planner"
 	"github.com/Chibuoyimm/qa-agent/internal/qa"
 	"github.com/Chibuoyimm/qa-agent/internal/repository"
@@ -54,6 +55,9 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("POST /api/worker/runs/{id}/heartbeat", a.authorize(a.workerToken, a.heartbeat))
 	mux.Handle("POST /api/worker/runs/{id}/complete", a.authorize(a.workerToken, a.completeRun))
 	mux.Handle("GET /api/ai/config", a.authorize(a.apiToken, a.aiConfig))
+	mux.Handle("GET /api/ai/opencode", a.authorize(a.apiToken, a.openCodeStatus))
+	mux.Handle("POST /api/ai/opencode/connect", a.authorize(a.apiToken, a.openCodeConnect))
+	mux.Handle("POST /api/ai/opencode/disconnect", a.authorize(a.apiToken, a.openCodeDisconnect))
 	mux.Handle("GET /api/ai/chatgpt", a.authorize(a.apiToken, a.chatGPTStatus))
 	mux.Handle("POST /api/ai/chatgpt/login", a.authorize(a.apiToken, a.chatGPTLogin))
 	mux.Handle("POST /api/ai/chatgpt/login/cancel", a.authorize(a.apiToken, a.chatGPTCancelLogin))
@@ -137,6 +141,18 @@ func (a *API) fail(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, "record not found")
 	case errors.Is(err, qa.ErrConflict):
 		writeError(w, http.StatusConflict, "invalid state or lease")
+	case errors.Is(err, opencode.ErrInvalid):
+		writeError(w, http.StatusBadRequest, opencode.ErrInvalid.Error())
+	case errors.Is(err, opencode.ErrBusy):
+		writeError(w, http.StatusConflict, opencode.ErrBusy.Error())
+	case errors.Is(err, opencode.ErrAuth):
+		writeError(w, http.StatusForbidden, opencode.ErrAuth.Error())
+	case errors.Is(err, opencode.ErrQuota):
+		writeError(w, http.StatusTooManyRequests, opencode.ErrQuota.Error())
+	case errors.Is(err, opencode.ErrUnavailable):
+		writeError(w, http.StatusServiceUnavailable, opencode.ErrUnavailable.Error())
+	case errors.Is(err, opencode.ErrRequest), errors.Is(err, opencode.ErrUpstream), errors.Is(err, opencode.ErrCleanup):
+		writeError(w, http.StatusBadGateway, err.Error())
 	case errors.Is(err, chatgpt.ErrInvalid):
 		writeError(w, http.StatusBadRequest, "invalid ChatGPT account or model selection")
 	case errors.Is(err, chatgpt.ErrReconnect):
