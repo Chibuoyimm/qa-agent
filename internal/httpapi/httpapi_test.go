@@ -519,4 +519,68 @@ func TestHTTPBoundary(t *testing.T) {
 	if release.Run.Status != "failed" || release.Run.Gate != "fail" || len(release.Run.Results) != 1 || release.Run.Results[0].Message != "dashboard total incorrect" {
 		t.Fatalf("completed release status: %+v", release.Run)
 	}
+	for _, providerName := range []string{"anthropic", "google"} {
+		for _, test := range []struct {
+			name           string
+			upstream, want int
+		}{
+			{"success", 200, 200}, {"auth", 401, 403}, {"quota", 429, 429}, {"schema", 400, 502}, {"outage", 503, 503},
+		} {
+			t.Run(providerName+"/"+test.name, func(t *testing.T) {
+				calls := 0
+				p, err := planner.NewProviders([]planner.ProviderSettings{{Provider: providerName, Models: "test-model"}}, transportFunc(func(req *http.Request) (*http.Response, error) {
+					calls++
+					if providerName == "anthropic" && req.Header.Get("Anthropic-Workspace-Id") != "wrkspc_test" {
+						t.Fatal("workspace header not forwarded")
+					}
+					output := `{"scenarios":[],"questions":["Which outcome should be checked?"],"assumptions":[]}`
+					text, err := json.Marshal(output)
+					if err != nil {
+						t.Fatal(err)
+					}
+					body := `{"type":"message","role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":` + string(text) + `}]}`
+					if providerName == "google" {
+						body = `{"candidates":[{"finishReason":"STOP","content":{"role":"model","parts":[{"text":` + string(text) + `}]}}]}`
+					}
+					if test.upstream != 200 {
+						body = "private-key private-context upstream-error"
+					}
+					return &http.Response{StatusCode: test.upstream, Body: io.NopCloser(strings.NewReader(body))}, nil
+				}))
+				if err != nil {
+					t.Fatal(err)
+				}
+				upstream := httptest.NewServer(httpapi.New(store, p, repository.New(nil), "api-token", "worker-token", slog.New(slog.NewTextHandler(io.Discard, nil))).Handler())
+				defer upstream.Close()
+				req, err := http.NewRequest("POST", upstream.URL+"/api/projects/"+project.ID+"/proposals", strings.NewReader(`{"provider":"`+providerName+`","prompt":"Check","context":"private-context","model":"test-model","credential_mode":"byok","consent":true}`))
+				if err != nil {
+					t.Fatal(err)
+				}
+				req.Header.Set("Authorization", "Bearer api-token")
+				req.Header.Set("X-QA-Provider-Key", "private-key")
+				if providerName == "anthropic" {
+					req.Header.Set("X-QA-Anthropic-Workspace", "wrkspc_test")
+				}
+				response, err := upstream.Client().Do(req)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer response.Body.Close()
+				content, err := io.ReadAll(response.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if response.StatusCode != test.want || calls != 1 {
+					t.Fatalf("status %d, want %d, calls %d", response.StatusCode, test.want, calls)
+				}
+				if bytes.Contains(content, []byte("private-key")) || bytes.Contains(content, []byte("private-context")) || bytes.Contains(content, []byte("upstream-error")) {
+					t.Fatal("response exposed upstream credentials or context")
+				}
+				if test.want == 200 && !bytes.Contains(content, []byte(`"provider":"`+providerName+`"`)) {
+					t.Fatal("wrong result provider")
+				}
+			})
+		}
+	}
+
 }

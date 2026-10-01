@@ -163,6 +163,14 @@ func (a *API) fail(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusTooManyRequests, "proposal generation is busy")
 	case errors.Is(err, planner.ErrTimeout):
 		writeError(w, http.StatusGatewayTimeout, "proposal provider timed out")
+	case errors.Is(err, planner.ErrProviderAuth):
+		writeError(w, http.StatusForbidden, err.Error())
+	case errors.Is(err, planner.ErrProviderRequest):
+		writeError(w, http.StatusBadGateway, err.Error())
+	case errors.Is(err, planner.ErrProviderQuota):
+		writeError(w, http.StatusTooManyRequests, err.Error())
+	case errors.Is(err, planner.ErrProviderUnavailable):
+		writeError(w, http.StatusServiceUnavailable, err.Error())
 	case errors.Is(err, planner.ErrUpstream):
 		writeError(w, http.StatusBadGateway, "proposal provider failed or returned invalid output")
 	case errors.Is(err, repository.ErrInvalid):
@@ -189,6 +197,7 @@ func (a *API) propose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	key := r.Header.Get("X-QA-Provider-Key")
+	in.WorkspaceID = r.Header.Get("X-QA-Anthropic-Workspace")
 	if err := a.planner.Validate(in, key); err != nil {
 		a.fail(w, err)
 		return

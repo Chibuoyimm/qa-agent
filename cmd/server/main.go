@@ -66,7 +66,11 @@ func run(logger *slog.Logger) error {
 	if err := migrations.Apply(startup, db); err != nil {
 		return err
 	}
-	proposals, err := planner.New(os.Getenv("QA_OPENAI_MODELS"), os.Getenv("QA_OPENAI_API_KEY"), nil)
+	proposals, err := planner.NewProviders([]planner.ProviderSettings{
+		{Provider: "openai", Models: os.Getenv("QA_OPENAI_MODELS"), ManagedKey: os.Getenv("QA_OPENAI_API_KEY")},
+		{Provider: "anthropic", Models: os.Getenv("QA_ANTHROPIC_MODELS"), ManagedKey: os.Getenv("QA_ANTHROPIC_API_KEY"), WorkspaceID: os.Getenv("QA_ANTHROPIC_WORKSPACE_ID")},
+		{Provider: "google", Models: os.Getenv("QA_GEMINI_MODELS"), ManagedKey: os.Getenv("QA_GEMINI_API_KEY")},
+	}, nil)
 	if err != nil {
 		return err
 	}

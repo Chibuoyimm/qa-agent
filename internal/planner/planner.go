@@ -1,7 +1,6 @@
 package planner
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"embed"
@@ -21,6 +20,10 @@ import (
 const endpoint = "https://api.openai.com/v1/responses"
 
 var (
+	ErrProviderAuth            = errors.New("provider key, workspace, or model access was rejected")
+	ErrProviderRequest         = errors.New("provider rejected the model or structured-output configuration")
+	ErrProviderQuota           = errors.New("provider quota or rate limit reached")
+	ErrProviderUnavailable     = errors.New("provider is temporarily unavailable")
 	ErrInvalid                 = errors.New("invalid proposal request")
 	ErrUnavailable             = errors.New("proposal access is not configured")
 	ErrBusy                    = errors.New("proposal generation is busy")
@@ -35,6 +38,8 @@ var (
 var schemaFile embed.FS
 
 type Input struct {
+	Provider              string   `json:"provider,omitempty"`
+	WorkspaceID           string   `json:"-"`
 	Prompt                string   `json:"prompt"`
 	Context               string   `json:"context"`
 	Model                 string   `json:"model"`
@@ -45,12 +50,20 @@ type Input struct {
 	DiscoveryID           string   `json:"discovery_id,omitempty"`
 }
 
+type ProviderConfig struct {
+	Provider         string   `json:"provider"`
+	Models           []string `json:"models"`
+	ManagedAvailable bool     `json:"managed_available"`
+	BYOKAvailable    bool     `json:"byok_available"`
+}
+
 type Config struct {
-	ChatGPT          *chatgpt.Status `json:"chatgpt,omitempty"`
-	Provider         string          `json:"provider"`
-	Models           []string        `json:"models"`
-	ManagedAvailable bool            `json:"managed_available"`
-	BYOKAvailable    bool            `json:"byok_available"`
+	Providers        []ProviderConfig `json:"providers"`
+	ChatGPT          *chatgpt.Status  `json:"chatgpt,omitempty"`
+	Provider         string           `json:"provider"`
+	Models           []string         `json:"models"`
+	ManagedAvailable bool             `json:"managed_available"`
+	BYOKAvailable    bool             `json:"byok_available"`
 }
 
 type Result struct {
@@ -67,34 +80,39 @@ type Result struct {
 }
 
 type Planner struct {
-	ChatGPT    *chatgpt.Client
-	models     []string
-	managedKey string
-	client     *http.Client
-	slots      chan struct{}
-	schema     json.RawMessage
-	deadline   time.Duration
+	ChatGPT   *chatgpt.Client
+	providers []configuredProvider
+	client    *http.Client
+	slots     chan struct{}
+	schema    json.RawMessage
+	deadline  time.Duration
 }
 
+// ProviderSettings are server configuration, never supplied by proposal callers.
+type ProviderSettings struct {
+	Provider    string
+	Models      string
+	ManagedKey  string
+	WorkspaceID string
+}
+
+type proposalProvider interface {
+	draft(context.Context, Input, string, string) (string, error)
+}
+
+type configuredProvider struct {
+	ProviderConfig
+	managedKey  string
+	workspaceID string
+	adapter     proposalProvider
+}
+
+// New preserves the OpenAI-only constructor for existing callers.
 func New(modelsRaw, managedKey string, transport http.RoundTripper) (*Planner, error) {
-	var models []string
-	seen := map[string]bool{}
-	for _, part := range strings.Split(modelsRaw, ",") {
-		model := strings.TrimSpace(part)
-		if model == "" {
-			continue
-		}
-		if len(model) > 100 || strings.ContainsAny(model, " \t\r\n") {
-			return nil, fmt.Errorf("invalid QA_OPENAI_MODELS entry %q", model)
-		}
-		if !seen[model] {
-			models = append(models, model)
-			seen[model] = true
-		}
-	}
-	if len(models) > 20 {
-		return nil, errors.New("QA_OPENAI_MODELS supports at most 20 models")
-	}
+	return NewProviders([]ProviderSettings{{Provider: "openai", Models: modelsRaw, ManagedKey: managedKey}}, transport)
+}
+
+func NewProviders(settings []ProviderSettings, transport http.RoundTripper) (*Planner, error) {
 	schema, err := schemaFile.ReadFile("schema.json")
 	if err != nil {
 		return nil, err
@@ -105,15 +123,99 @@ func New(modelsRaw, managedKey string, transport http.RoundTripper) (*Planner, e
 	if transport == nil {
 		transport = http.DefaultTransport
 	}
-	return &Planner{
-		models: models, managedKey: managedKey,
+	p := &Planner{
 		client: &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 		slots:  make(chan struct{}, 2), schema: schema, deadline: 90 * time.Second,
-	}, nil
+	}
+	for _, setting := range settings {
+		configured := configuredProvider{ProviderConfig: ProviderConfig{Provider: setting.Provider, Models: []string{}}, managedKey: setting.ManagedKey, workspaceID: setting.WorkspaceID}
+		switch setting.Provider {
+		case "openai":
+			configured.adapter = openAIProvider{p}
+		case "anthropic":
+			configured.adapter = anthropicProvider{p}
+		case "google":
+			configured.adapter = geminiProvider{p}
+		default:
+			return nil, errors.New("unknown proposal provider configuration")
+		}
+		if _, exists := p.provider(setting.Provider); exists {
+			return nil, errors.New("duplicate proposal provider configuration")
+		}
+		if setting.WorkspaceID != "" && (setting.Provider != "anthropic" || !validWorkspaceID(setting.WorkspaceID)) {
+			return nil, errors.New("invalid provider workspace configuration")
+		}
+		if setting.ManagedKey != "" && !validKey(setting.ManagedKey) {
+			return nil, errors.New("invalid managed provider key configuration")
+		}
+		for _, part := range strings.Split(setting.Models, ",") {
+			model := strings.TrimSpace(part)
+			if model == "" {
+				continue
+			}
+			if !validModelID(model) {
+				return nil, fmt.Errorf("invalid %s model configuration", setting.Provider)
+			}
+			found := false
+			for _, existing := range configured.Models {
+				if existing == model {
+					found = true
+					break
+				}
+			}
+			if !found {
+				configured.Models = append(configured.Models, model)
+			}
+		}
+		if len(configured.Models) > 20 {
+			return nil, fmt.Errorf("%s supports at most 20 configured models", setting.Provider)
+		}
+		configured.ManagedAvailable = len(configured.Models) > 0 && setting.ManagedKey != ""
+		configured.BYOKAvailable = len(configured.Models) > 0
+		p.providers = append(p.providers, configured)
+	}
+	return p, nil
+}
+
+func validModelID(value string) bool {
+	return len(value) > 0 && len(value) <= 100 && strings.IndexFunc(value, func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '.' || r == '_' || r == '-')
+	}) == -1
+}
+
+func validKey(value string) bool {
+	return value != "" && len(value) <= 4096 && strings.IndexFunc(value, func(r rune) bool { return r <= 32 || r >= 127 }) == -1
+}
+
+func validWorkspaceID(value string) bool {
+	return strings.HasPrefix(value, "wrkspc_") && validModelID(value) && len(value) > len("wrkspc_")
+}
+
+func (p *Planner) provider(name string) (configuredProvider, bool) {
+	if name == "" {
+		name = "openai"
+	}
+	for _, provider := range p.providers {
+		if provider.Provider == name {
+			return provider, true
+		}
+	}
+	return configuredProvider{}, false
 }
 
 func (p *Planner) Config() Config {
-	cfg := Config{Provider: "openai", Models: append([]string{}, p.models...), ManagedAvailable: len(p.models) > 0 && p.managedKey != "", BYOKAvailable: len(p.models) > 0}
+	cfg := Config{Provider: "openai", Models: []string{}, Providers: []ProviderConfig{}}
+	for _, provider := range p.providers {
+		public := provider.ProviderConfig
+		public.Models = append([]string{}, public.Models...)
+		cfg.Providers = append(cfg.Providers, public)
+		// Legacy fields describe OpenAI only.
+		if provider.Provider == "openai" {
+			cfg.Models = public.Models
+			cfg.ManagedAvailable = public.ManagedAvailable
+			cfg.BYOKAvailable = public.BYOKAvailable
+		}
+	}
 	if p.ChatGPT != nil {
 		status := p.ChatGPT.Status()
 		cfg.ChatGPT = &status
@@ -137,6 +239,9 @@ func (p *Planner) Validate(in Input, byokKey string) error {
 		seenIDs[id] = true
 	}
 	if in.CredentialMode == "chatgpt" {
+		if (in.Provider != "" && in.Provider != "openai") || in.WorkspaceID != "" {
+			return fmt.Errorf("%w: ChatGPT plan access requires OpenAI without a workspace header", ErrInvalid)
+		}
 		if p.ChatGPT == nil {
 			return ErrUnavailable
 		}
@@ -148,11 +253,18 @@ func (p *Planner) Validate(in Input, byokKey string) error {
 	if in.ChatGPTProfileID != "" {
 		return fmt.Errorf("%w: ChatGPT account requires ChatGPT plan access", ErrInvalid)
 	}
-	if len(p.models) == 0 {
+	configured, exists := p.provider(in.Provider)
+	if !exists {
+		return fmt.Errorf("%w: provider is not configured", ErrInvalid)
+	}
+	if in.WorkspaceID != "" && (configured.Provider != "anthropic" || in.CredentialMode != "byok" || !validWorkspaceID(in.WorkspaceID)) {
+		return fmt.Errorf("%w: workspace header requires Anthropic BYOK and a valid workspace ID", ErrInvalid)
+	}
+	if len(configured.Models) == 0 {
 		return ErrUnavailable
 	}
 	modelAllowed := false
-	for _, model := range p.models {
+	for _, model := range configured.Models {
 		if model == in.Model {
 			modelAllowed = true
 			break
@@ -163,11 +275,11 @@ func (p *Planner) Validate(in Input, byokKey string) error {
 	}
 	switch in.CredentialMode {
 	case "managed":
-		if p.managedKey == "" {
+		if configured.managedKey == "" {
 			return ErrUnavailable
 		}
 	case "byok":
-		if strings.TrimSpace(byokKey) == "" || len(byokKey) > 4096 || strings.ContainsAny(byokKey, " \t\r\n") {
+		if !validKey(byokKey) {
 			return fmt.Errorf("%w: X-QA-Provider-Key is required", ErrInvalid)
 		}
 	default:
@@ -235,16 +347,25 @@ func (p *Planner) Propose(ctx context.Context, in Input, byokKey string) (Result
 	}
 	providerCtx, cancel := context.WithTimeout(ctx, p.deadline)
 	defer cancel()
-	var provider providerResponse
+	var outputText string
 	var err error
+	providerName := in.Provider
+	if providerName == "" {
+		providerName = "openai"
+	}
 	if in.CredentialMode == "chatgpt" {
-		provider, err = p.subscriptionResponse(providerCtx, in)
-	} else {
-		key := p.managedKey
-		if in.CredentialMode == "byok" {
-			key = byokKey
+		var response providerResponse
+		response, err = p.subscriptionResponse(providerCtx, in)
+		if err == nil {
+			outputText, err = openAIOutput(response)
 		}
-		provider, err = p.apiResponse(providerCtx, in, key)
+	} else {
+		configured, _ := p.provider(providerName) // Already validated above.
+		key, workspace := configured.managedKey, configured.workspaceID
+		if in.CredentialMode == "byok" {
+			key, workspace = byokKey, in.WorkspaceID
+		}
+		outputText, err = configured.adapter.draft(providerCtx, in, key, workspace)
 	}
 	if err != nil {
 		if errors.Is(providerCtx.Err(), context.DeadlineExceeded) {
@@ -254,32 +375,6 @@ func (p *Planner) Propose(ctx context.Context, in Input, byokKey string) (Result
 			return Result{}, ctx.Err()
 		}
 		return Result{}, err
-	}
-	var outputText string
-	for _, item := range provider.Output {
-		if item.Type == "reasoning" {
-			continue
-		}
-		if item.Type != "message" || item.Role != "assistant" || len(item.Content) != 1 {
-			return Result{}, ErrUpstream
-		}
-		if item.Status != "completed" {
-			return Result{}, ErrUpstream
-		}
-		for _, content := range item.Content {
-			if content.Type != "output_text" || content.Refusal != "" || content.Text == "" {
-				return Result{}, ErrUpstream
-			}
-			if content.Type == "output_text" {
-				if outputText != "" {
-					return Result{}, ErrUpstream
-				}
-				outputText = content.Text
-			}
-		}
-	}
-	if outputText == "" {
-		return Result{}, ErrUpstream
 	}
 	dec := json.NewDecoder(strings.NewReader(outputText))
 	dec.DisallowUnknownFields()
@@ -312,42 +407,35 @@ func (p *Planner) Propose(ctx context.Context, in Input, byokKey string) (Result
 		}
 	}
 	hash := sha256.Sum256([]byte(in.Context))
-	return Result{CredentialMode: in.CredentialMode, ChatGPTProfileID: in.ChatGPTProfileID, Provider: "openai", Model: in.Model, ContextSHA256: hex.EncodeToString(hash[:]), Scenarios: proposed.Scenarios, Questions: proposed.Questions, Assumptions: proposed.Assumptions, RepositorySnapshots: []qa.RepositorySummary{}}, nil
+	return Result{CredentialMode: in.CredentialMode, ChatGPTProfileID: in.ChatGPTProfileID, Provider: providerName, Model: in.Model, ContextSHA256: hex.EncodeToString(hash[:]), Scenarios: proposed.Scenarios, Questions: proposed.Questions, Assumptions: proposed.Assumptions, RepositorySnapshots: []qa.RepositorySummary{}}, nil
 }
 
-func (p *Planner) apiResponse(ctx context.Context, in Input, key string) (providerResponse, error) {
-	request := providerRequest{Model: in.Model, Instructions: instructions,
-		Input: "Testing request:\n" + in.Prompt + "\n\nApplication context:\n" + in.Context,
-		Store: false, MaxOutputTokens: 6000}
-	request.Text.Format.Type = "json_schema"
-	request.Text.Format.Name = "qa_scenario_proposals"
-	request.Text.Format.Strict = true
-	request.Text.Format.Schema = p.schema
-	body, err := json.Marshal(request)
-	if err != nil {
-		return providerResponse{}, ErrUpstream
+func openAIOutput(provider providerResponse) (string, error) {
+	var outputText string
+	for _, item := range provider.Output {
+		if item.Type == "reasoning" {
+			continue
+		}
+		if item.Type != "message" || item.Role != "assistant" || len(item.Content) != 1 {
+			return "", ErrUpstream
+		}
+		if item.Status != "completed" {
+			return "", ErrUpstream
+		}
+		for _, content := range item.Content {
+			if content.Type != "output_text" || content.Refusal != "" || content.Text == "" {
+				return "", ErrUpstream
+			}
+			if content.Type == "output_text" {
+				if outputText != "" {
+					return "", ErrUpstream
+				}
+				outputText = content.Text
+			}
+		}
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
-	if err != nil {
-		return providerResponse{}, ErrUpstream
+	if outputText == "" {
+		return "", ErrUpstream
 	}
-	req.Header.Set("Authorization", "Bearer "+key)
-	req.Header.Set("Content-Type", "application/json")
-	response, err := p.client.Do(req)
-	if err != nil {
-		return providerResponse{}, ErrUpstream
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return providerResponse{}, ErrUpstream
-	}
-	data, err := io.ReadAll(io.LimitReader(response.Body, (2<<20)+1))
-	if err != nil || len(data) > 2<<20 {
-		return providerResponse{}, ErrUpstream
-	}
-	var provider providerResponse
-	if err := json.Unmarshal(data, &provider); err != nil || provider.Status != "completed" {
-		return providerResponse{}, ErrUpstream
-	}
-	return provider, nil
+	return outputText, nil
 }

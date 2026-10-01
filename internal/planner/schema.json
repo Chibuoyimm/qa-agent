@@ -5,7 +5,7 @@
   "properties": {
     "scenarios": {
       "type": "array",
-      "maxItems": 10,
+      "description": "At most 10 unapproved scenario drafts.",
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -16,8 +16,8 @@
           "expected_outcome": {"type": "string"},
           "steps": {
             "type": "array",
+            "description": "Between 1 and 50 steps, including at least one assertion.",
             "minItems": 1,
-            "maxItems": 50,
             "items": {
               "type": "object",
               "additionalProperties": false,
@@ -34,7 +34,7 @@
         }
       }
     },
-    "questions": {"type": "array", "maxItems": 20, "items": {"type": "string"}},
-    "assumptions": {"type": "array", "maxItems": 20, "items": {"type": "string"}}
+    "questions": {"type": "array", "description": "At most 20 focused questions, each at most 4000 characters.", "items": {"type": "string"}},
+    "assumptions": {"type": "array", "description": "At most 20 assumptions, each at most 4000 characters.", "items": {"type": "string"}}
   }
 }
