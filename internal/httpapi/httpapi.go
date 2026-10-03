@@ -68,6 +68,7 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("GET /api/projects/{id}/chat", a.authorize(a.apiToken, a.listChat))
 	mux.Handle("POST /api/projects/{id}/chat", a.authorize(a.apiToken, a.chatProposal))
 	mux.Handle("POST /api/projects/{id}/chat/runs", a.authorize(a.apiToken, a.chatRun))
+	mux.Handle("POST /api/projects/{id}/repositories/search", a.authorize(a.apiToken, a.searchRepository))
 	mux.Handle("POST /api/projects/{id}/repositories/sync", a.authorize(a.apiToken, a.syncRepository))
 	mux.Handle("GET /api/projects/{id}/repositories", a.authorize(a.apiToken, a.listRepositories))
 	mux.Handle("GET /api/projects/{id}/repositories/{snapshot_id}", a.authorize(a.apiToken, a.getRepository))
@@ -84,6 +85,8 @@ func (a *API) Handler() http.Handler {
 			deadline = 95 * time.Second
 		} else if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/repositories/sync") {
 			deadline = 50 * time.Second
+		} else if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/repositories/search") {
+			deadline = 185 * time.Second
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), deadline)
 		defer cancel()
@@ -190,12 +193,16 @@ func (a *API) fail(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusTooManyRequests, err.Error())
 	case errors.Is(err, planner.ErrProviderUnavailable):
 		writeError(w, http.StatusServiceUnavailable, err.Error())
+	case errors.Is(err, planner.ErrFileSelection):
+		writeError(w, http.StatusBadGateway, "AI file selection was invalid or exceeded 20 files / 40,000 bytes. Narrow the testing request or choose files manually.")
 	case errors.Is(err, planner.ErrUpstream):
 		writeError(w, http.StatusBadGateway, "proposal provider failed or returned invalid output")
 	case errors.Is(err, repository.ErrInvalid):
 		writeError(w, http.StatusBadRequest, "invalid repository import request or content")
 	case errors.Is(err, repository.ErrBusy):
 		writeError(w, http.StatusTooManyRequests, "repository import is busy")
+	case errors.Is(err, repository.ErrInventoryLimit):
+		writeError(w, http.StatusUnprocessableEntity, repository.ErrInventoryLimit.Error())
 	case errors.Is(err, repository.ErrTimeout):
 		writeError(w, http.StatusGatewayTimeout, "repository provider timed out")
 	case errors.Is(err, repository.ErrUpstream):
@@ -324,13 +331,9 @@ func (a *API) syncRepository(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, err)
 		return
 	}
-	githubToken, azureToken := r.Header.Get("X-QA-GitHub-Token"), r.Header.Get("X-QA-Azure-PAT")
-	token := githubToken
-	if repository.EffectiveProvider(in.Provider) == "azure" {
-		token = azureToken
-	}
-	if (repository.EffectiveProvider(in.Provider) == "azure" && githubToken != "") || (repository.EffectiveProvider(in.Provider) != "azure" && azureToken != "") {
-		a.fail(w, fmt.Errorf("%w: credential header does not match repository provider", repository.ErrInvalid))
+	token, err := repositoryCredential(r, in.Provider)
+	if err != nil {
+		a.fail(w, err)
 		return
 	}
 	imported, err := a.repositories.Fetch(r.Context(), in, token)

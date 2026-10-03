@@ -91,6 +91,13 @@ func EffectiveProvider(provider string) string {
 
 // Validate checks an import request and transient credential before provider access.
 func Validate(in Input, token string) error {
+	if err := validateConnection(in, token); err != nil {
+		return err
+	}
+	return validatePaths(in.Paths)
+}
+
+func validateConnection(in Input, token string) error {
 	switch EffectiveProvider(in.Provider) {
 	case "github":
 		parts := strings.Split(in.Repository, "/")
@@ -110,9 +117,6 @@ func Validate(in Input, token string) error {
 	if in.Role != "frontend" && in.Role != "backend" {
 		return fmt.Errorf("%w: invalid role", ErrInvalid)
 	}
-	if len(in.Paths) == 0 || len(in.Paths) > maxFiles {
-		return fmt.Errorf("%w: choose 1–20 paths", ErrInvalid)
-	}
 	if len(token) > 4096 {
 		return fmt.Errorf("%w: invalid token", ErrInvalid)
 	}
@@ -121,8 +125,15 @@ func Validate(in Input, token string) error {
 			return fmt.Errorf("%w: invalid token", ErrInvalid)
 		}
 	}
-	seen := make(map[string]bool, len(in.Paths))
-	for _, p := range in.Paths {
+	return nil
+}
+
+func validatePaths(paths []string) error {
+	if len(paths) == 0 || len(paths) > maxFiles {
+		return fmt.Errorf("%w: choose 1–20 paths", ErrInvalid)
+	}
+	seen := make(map[string]bool, len(paths))
+	for _, p := range paths {
 		if p == "" || len(p) > 1024 || !utf8.ValidString(p) || strings.HasPrefix(p, "/") || strings.ContainsAny(p, "\\\x00\r\n") || seen[p] {
 			return fmt.Errorf("%w: invalid or duplicate path", ErrInvalid)
 		}

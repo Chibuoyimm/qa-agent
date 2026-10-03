@@ -12,14 +12,14 @@ type openAIProvider struct{ planner *Planner }
 type anthropicProvider struct{ planner *Planner }
 type geminiProvider struct{ planner *Planner }
 
-func (a openAIProvider) draft(ctx context.Context, in Input, key, workspace string) (string, error) {
-	request := providerRequest{Model: in.Model, Instructions: instructions,
+func (a openAIProvider) draft(ctx context.Context, in Input, key, workspace string, spec draftSpec) (string, error) {
+	request := providerRequest{Model: in.Model, Instructions: spec.instructions,
 		Input: "Testing request:\n" + in.Prompt + "\n\nApplication context:\n" + in.Context,
 		Store: false, MaxOutputTokens: 6000}
 	request.Text.Format.Type = "json_schema"
-	request.Text.Format.Name = "qa_scenario_proposals"
+	request.Text.Format.Name = spec.name
 	request.Text.Format.Strict = true
-	request.Text.Format.Schema = a.planner.schema
+	request.Text.Format.Schema = spec.schema
 	body, err := json.Marshal(request)
 	if err != nil {
 		return "", ErrUpstream
@@ -65,10 +65,10 @@ type anthropicResponse struct {
 	} `json:"content"`
 }
 
-func (a anthropicProvider) draft(ctx context.Context, in Input, key, workspace string) (string, error) {
-	request := anthropicRequest{Model: in.Model, MaxTokens: 6000, System: instructions,
+func (a anthropicProvider) draft(ctx context.Context, in Input, key, workspace string, spec draftSpec) (string, error) {
+	request := anthropicRequest{Model: in.Model, MaxTokens: 6000, System: spec.instructions,
 		Messages: []anthropicMessage{{Role: "user", Content: "Testing request:\n" + in.Prompt + "\n\nApplication context:\n" + in.Context}}}
-	request.OutputConfig.Format = jsonFormat{Type: "json_schema", Schema: a.planner.schema}
+	request.OutputConfig.Format = jsonFormat{Type: "json_schema", Schema: spec.schema}
 	body, err := json.Marshal(request)
 	if err != nil {
 		return "", ErrUpstream
@@ -141,15 +141,15 @@ type geminiResponseText struct {
 	ThoughtSignature string `json:"thoughtSignature"`
 }
 
-func (a geminiProvider) draft(ctx context.Context, in Input, key, workspace string) (string, error) {
+func (a geminiProvider) draft(ctx context.Context, in Input, key, workspace string, spec draftSpec) (string, error) {
 	request := geminiRequest{
-		SystemInstruction: geminiContent{Parts: []geminiText{{Text: instructions}}},
+		SystemInstruction: geminiContent{Parts: []geminiText{{Text: spec.instructions}}},
 		Contents:          []geminiContent{{Role: "user", Parts: []geminiText{{Text: "Testing request:\n" + in.Prompt + "\n\nApplication context:\n" + in.Context}}}},
 	}
 	request.GenerationConfig.CandidateCount = 1
 	request.GenerationConfig.MaxOutputTokens = 6000
 	request.GenerationConfig.ResponseFormat.Text.MIMEType = "application/json"
-	request.GenerationConfig.ResponseFormat.Text.Schema = a.planner.schema
+	request.GenerationConfig.ResponseFormat.Text.Schema = spec.schema
 	body, err := json.Marshal(request)
 	if err != nil {
 		return "", ErrUpstream

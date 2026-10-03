@@ -89,7 +89,7 @@ func run(logger *slog.Logger) error {
 		Handler:           httpapi.New(qa.NewStore(db, allowed), proposals, repository.New(nil), apiToken, workerToken, logger).Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
-		WriteTimeout:      100 * time.Second,
+		WriteTimeout:      190 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
 	server.RegisterOnShutdown(func() { logger.Info("server shut down") })

@@ -22,7 +22,7 @@ const RuntimeVersion = "1.18.34"
 
 // Pinned V1 configuration: no inherited plugins, files, other provider keys or
 // background model calls. StructuredOutput is added by the prompt API itself.
-const runtimeConfig = `{"enabled_providers":["opencode-go"],"default_agent":"qa-proposal","permission":"deny","agent":{"qa-proposal":{"mode":"primary","prompt":"Draft executable QA scenarios only from the explicitly supplied evidence. Use StructuredOutput to return the proposal; do not inspect files or execute actions.","steps":1,"permission":{"*":"deny","StructuredOutput":"allow"}},"build":{"disable":true},"plan":{"disable":true},"general":{"disable":true},"explore":{"disable":true},"title":{"disable":true},"summary":{"disable":true},"compaction":{"disable":true}},"share":"disabled","autoupdate":false,"snapshot":false,"compaction":{"auto":false,"prune":false}}`
+const runtimeConfig = `{"enabled_providers":["opencode-go"],"default_agent":"qa-proposal","permission":"deny","agent":{"qa-proposal":{"mode":"primary","prompt":"Complete the requested structured QA task only from the explicitly supplied evidence. Use StructuredOutput to return the result; do not inspect files or execute actions.","steps":1,"permission":{"*":"deny","StructuredOutput":"allow"}},"build":{"disable":true},"plan":{"disable":true},"general":{"disable":true},"explore":{"disable":true},"title":{"disable":true},"summary":{"disable":true},"compaction":{"disable":true}},"share":"disabled","autoupdate":false,"snapshot":false,"compaction":{"auto":false,"prune":false}}`
 
 type runtimeProcess struct {
 	cmd  *exec.Cmd

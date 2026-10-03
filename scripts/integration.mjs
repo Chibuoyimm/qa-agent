@@ -371,6 +371,48 @@ try {
     await page.route('**/api/ai/config', route => route.fulfill({ json: {
       provider: 'openai', models: ['test-model'], managed_available: false, byok_available: true,
     } }));
+    // Browser contract uses synthetic repository/model responses; the real
+    // search/import/persistence boundary is exercised with PostgreSQL in Go.
+    const foundSnapshot = { id: 'synthetic-file-search', project_id: healthy.project.id, provider: 'github', repository: 'fixture/app', ref: 'main', role: 'frontend', commit_sha: 'a'.repeat(40), content_sha256: 'b'.repeat(64), file_count: 1, total_bytes: 5, created_at: new Date().toISOString(), files: [{ path: 'src/login.ts', content: 'hello' }] };
+    await page.route('**/repositories/synthetic-file-search', route => route.fulfill({ json: foundSnapshot }));
+    await page.route('**/repositories/search', async route => {
+      const input = route.request().postDataJSON();
+      assert.equal(input.repository.repository, 'fixture/app');
+      assert.equal(input.repository.paths, undefined, 'Agent search requires no manual paths');
+      assert.equal(input.ai.prompt, 'Test login');
+      assert.equal(input.ai.consent, true);
+      assert.equal(route.request().headers()['x-qa-provider-key'], 'synthetic-model-key');
+      assert.equal(route.request().headers()['x-qa-github-token'], 'synthetic-repo-token');
+      await route.fulfill({ json: { snapshot: foundSnapshot, reason: 'Login implementation selected.', candidates: 4, excluded: 2 } });
+    });
+    await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('button', { name: 'Repository', exact: true }).click();
+    assert.equal(await page.getByLabel('File selection', { exact: true }).inputValue(), 'agent');
+    assert.equal(await page.getByLabel('Exact file paths', { exact: false }).count(), 0);
+    await page.getByLabel('GitHub repository', { exact: false }).fill('fixture/app');
+    await page.getByRole('textbox', { name: 'Testing request *', exact: true }).fill('Test login');
+    await page.getByLabel('OpenAI API key', { exact: true }).fill('synthetic-model-key');
+    await page.getByLabel('GitHub token', { exact: false }).fill('synthetic-repo-token');
+    const searchConsent = page.getByRole('checkbox', { name: /repository file names and sizes/ });
+    await searchConsent.check();
+    await page.getByLabel('Ref', { exact: false }).fill('other');
+    assert.equal(await searchConsent.isChecked(), false, 'Changing repository resets consent');
+    await page.getByLabel('Ref', { exact: false }).fill('main');
+    await searchConsent.check();
+    await page.getByRole('button', { name: 'Find relevant files', exact: true }).click();
+    await page.getByText('src/login.ts', { exact: true }).waitFor();
+    await page.getByText('hello', { exact: true }).waitFor();
+    assert.equal(await page.getByLabel('GitHub token', { exact: false }).inputValue(), '');
+    assert.equal(await page.getByLabel('OpenAI API key', { exact: true }).inputValue(), '');
+    await page.screenshot({ path: resolve(evidence, 'repository-file-search.png'), fullPage: true });
+    await page.setViewportSize({ width: 390, height: 844 });
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'File search mobile layout has no overflow');
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.getByLabel('File selection', { exact: true }).selectOption('manual');
+    await page.getByLabel('Exact file paths', { exact: false }).waitFor();
+    await page.unroute('**/repositories/search');
+    await page.unroute('**/repositories/synthetic-file-search');
+    observations.push({ name: 'Agent file search UI selects, clears credentials, and opens complete content for review (synthetic provider)', status: 'passed' });
+    await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('button', { name: /^Scenarios/ }).click();
     const proposal = { ...templates[0], name: 'Proposed independent revenue check', approved: false };
     await page.route('**/proposals', async route => {
       assert.equal(route.request().headers()['x-qa-provider-key'], 'synthetic-provider-key');

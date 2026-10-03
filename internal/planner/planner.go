@@ -89,7 +89,7 @@ type ProviderSettings struct {
 }
 
 type proposalProvider interface {
-	draft(context.Context, Input, string, string) (string, error)
+	draft(context.Context, Input, string, string, draftSpec) (string, error)
 }
 
 type configuredProvider struct {
@@ -341,45 +341,13 @@ func (p *Planner) Propose(ctx context.Context, in Input, byokKey string) (Result
 	if len(strings.TrimSpace(in.Context)) == 0 {
 		return Result{}, fmt.Errorf("%w: assembled context is required", ErrInvalid)
 	}
-	select {
-	case p.slots <- struct{}{}:
-		defer func() { <-p.slots }()
-	default:
-		return Result{}, ErrBusy
+	outputText, err := p.generate(ctx, in, byokKey, p.proposalSpec())
+	if err != nil {
+		return Result{}, err
 	}
-	providerCtx, cancel := context.WithTimeout(ctx, p.deadline)
-	defer cancel()
-	var outputText string
-	var err error
 	providerName := in.Provider
 	if providerName == "" {
 		providerName = "openai"
-	}
-	if in.CredentialMode == "chatgpt" {
-		var response providerResponse
-		response, err = p.subscriptionResponse(providerCtx, in)
-		if err == nil {
-			outputText, err = openAIOutput(response)
-		}
-	} else if in.CredentialMode == "opencode" {
-		openCodeInstructions := strings.TrimSuffix(instructions, "No tools or browsing are available.") + "Use only StructuredOutput to return the proposal. Files, shell, browsing, and other tools are unavailable."
-		outputText, err = p.OpenCode.Draft(providerCtx, in.Model, openCodeInstructions, "Testing request:\n"+in.Prompt+"\n\nApplication context:\n"+in.Context, p.schema)
-	} else {
-		configured, _ := p.provider(providerName) // Already validated above.
-		key, workspace := configured.managedKey, configured.workspaceID
-		if in.CredentialMode == "byok" {
-			key, workspace = byokKey, in.WorkspaceID
-		}
-		outputText, err = configured.adapter.draft(providerCtx, in, key, workspace)
-	}
-	if err != nil {
-		if errors.Is(providerCtx.Err(), context.DeadlineExceeded) {
-			return Result{}, ErrTimeout
-		}
-		if ctx.Err() != nil {
-			return Result{}, ctx.Err()
-		}
-		return Result{}, err
 	}
 	dec := json.NewDecoder(strings.NewReader(outputText))
 	dec.DisallowUnknownFields()
@@ -441,6 +409,59 @@ func openAIOutput(provider providerResponse) (string, error) {
 	}
 	if outputText == "" {
 		return "", ErrUpstream
+	}
+	return outputText, nil
+}
+
+// draftSpec is the structured contract for the two supported model operations.
+type draftSpec struct {
+	instructions, name string
+	schema             json.RawMessage
+}
+
+func (p *Planner) proposalSpec() draftSpec {
+	return draftSpec{instructions, "qa_scenario_proposals", p.schema}
+}
+func (p *Planner) generate(ctx context.Context, in Input, byokKey string, spec draftSpec) (string, error) {
+	select {
+	case p.slots <- struct{}{}:
+		defer func() { <-p.slots }()
+	default:
+		return "", ErrBusy
+	}
+	providerCtx, cancel := context.WithTimeout(ctx, p.deadline)
+	defer cancel()
+	var outputText string
+	var err error
+	providerName := in.Provider
+	if providerName == "" {
+		providerName = "openai"
+	}
+	if in.CredentialMode == "chatgpt" {
+		var response providerResponse
+		response, err = p.subscriptionResponse(providerCtx, in, spec)
+		if err == nil {
+			outputText, err = openAIOutput(response)
+		}
+	} else if in.CredentialMode == "opencode" {
+		openCodeInstructions := spec.instructions + " Use only StructuredOutput. Files, shell, browsing, and other tools are unavailable."
+		outputText, err = p.OpenCode.Draft(providerCtx, in.Model, openCodeInstructions, "Testing request:\n"+in.Prompt+"\n\nApplication context:\n"+in.Context, spec.schema)
+	} else {
+		configured, _ := p.provider(providerName) // Already validated above.
+		key, workspace := configured.managedKey, configured.workspaceID
+		if in.CredentialMode == "byok" {
+			key, workspace = byokKey, in.WorkspaceID
+		}
+		outputText, err = configured.adapter.draft(providerCtx, in, key, workspace, spec)
+	}
+	if err != nil {
+		if errors.Is(providerCtx.Err(), context.DeadlineExceeded) {
+			return "", ErrTimeout
+		}
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		return "", err
 	}
 	return outputText, nil
 }

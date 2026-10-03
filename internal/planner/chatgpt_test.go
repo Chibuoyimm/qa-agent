@@ -124,7 +124,7 @@ func TestSubscriptionAcceptsMissingContentTypeOnlyForValidStream(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		result, err := p.streamSubscription(context.Background(), validInput("chatgpt"), "subscription-token")
+		result, err := p.streamSubscription(context.Background(), validInput("chatgpt"), "subscription-token", p.proposalSpec())
 		if body == created+done+completed {
 			if err != nil || len(result.Output) != 1 {
 				t.Fatalf("result %+v error %v", result, err)
@@ -165,7 +165,7 @@ func TestSubscriptionWireContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := p.streamSubscription(context.Background(), validInput("chatgpt"), "subscription-token")
+	result, err := p.streamSubscription(context.Background(), validInput("chatgpt"), "subscription-token", p.proposalSpec())
 	if err != nil || result.Status != "completed" || calls != 1 {
 		t.Fatalf("status %s error %v calls %d", result.Status, err, calls)
 	}
@@ -197,7 +197,7 @@ func TestSubscriptionHTTPFailures(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, err = p.streamSubscription(context.Background(), validInput("chatgpt"), "subscription-token")
+			_, err = p.streamSubscription(context.Background(), validInput("chatgpt"), "subscription-token", p.proposalSpec())
 			if !errors.Is(err, tc.want) || calls != 1 {
 				t.Fatalf("wanted %v got %v calls%d", tc.want, err, calls)
 			}

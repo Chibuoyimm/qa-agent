@@ -189,7 +189,7 @@ func TestNativeRuntimeProposal(t *testing.T) {
 	var quota atomic.Bool
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		count := calls.Add(1)
-		if count > 2 {
+		if count > 3 {
 			w.WriteHeader(400)
 			return
 		}
@@ -234,7 +234,11 @@ func TestNativeRuntimeProposal(t *testing.T) {
 			t.Errorf("model %q", body.Model)
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
-		fmt.Fprintln(w, `data: {"id":"fixture","object":"chat.completion.chunk","created":1,"model":"qa-fixture","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_fixture","type":"function","function":{"name":"StructuredOutput","arguments":"{\"questions\":[\"What is the expected outcome?\"]}"}}]},"finish_reason":null}]}`)
+		if count == 2 {
+			fmt.Fprintln(w, `data: {"id":"fixture","object":"chat.completion.chunk","created":1,"model":"qa-fixture","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_fixture","type":"function","function":{"name":"StructuredOutput","arguments":"{\"paths\":[\"login.ts\"],\"reason\":\"Login feature\"}"}}]},"finish_reason":null}]}`)
+		} else {
+			fmt.Fprintln(w, `data: {"id":"fixture","object":"chat.completion.chunk","created":1,"model":"qa-fixture","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_fixture","type":"function","function":{"name":"StructuredOutput","arguments":"{\"questions\":[\"What is the expected outcome?\"]}"}}]},"finish_reason":null}]}`)
+		}
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, `data: {"id":"fixture","object":"chat.completion.chunk","created":1,"model":"qa-fixture","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":20,"completion_tokens":10,"total_tokens":30}}`)
 		fmt.Fprintln(w)
@@ -276,12 +280,16 @@ func TestNativeRuntimeProposal(t *testing.T) {
 	if calls.Load() != 1 {
 		t.Fatalf("extra provider requests: %d", calls.Load())
 	}
+	output, err = c.Draft(ctx, "qa-fixture", "Select relevant repository files from the inventory.", "login.ts: 5 bytes", json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"paths":{"type":"array","items":{"type":"string"}},"reason":{"type":"string"}},"required":["paths","reason"]}`))
+	if err != nil || output != `{"paths":["login.ts"],"reason":"Login feature"}` || calls.Load() != 2 {
+		t.Fatalf("native file selection: %s %v calls=%d", output, err, calls.Load())
+	}
 	quota.Store(true)
 	_, err = c.Draft(ctx, "qa-fixture", "Return reviewed QA facts.", "synthetic context", json.RawMessage(`{"type":"object"}`))
 	if !errors.Is(err, ErrQuota) {
 		t.Fatalf("native quota error: %v", err)
 	}
-	if calls.Load() != 2 {
+	if calls.Load() != 3 {
 		t.Fatalf("native quota request retried: %d total calls", calls.Load())
 	}
 	var sessions []json.RawMessage

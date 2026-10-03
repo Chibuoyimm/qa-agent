@@ -12,7 +12,7 @@ import (
 	"github.com/Chibuoyimm/qa-agent/internal/chatgpt"
 )
 
-func (p *Planner) subscriptionResponse(ctx context.Context, in Input) (providerResponse, error) {
+func (p *Planner) subscriptionResponse(ctx context.Context, in Input, spec draftSpec) (providerResponse, error) {
 	ctx, release, err := p.ChatGPT.RequestContext(ctx, in.ChatGPTProfileID)
 	if err != nil {
 		return providerResponse{}, err
@@ -36,10 +36,10 @@ func (p *Planner) subscriptionResponse(ctx context.Context, in Input) (providerR
 	if err != nil {
 		return providerResponse{}, err
 	}
-	return p.streamSubscription(ctx, in, key)
+	return p.streamSubscription(ctx, in, key, spec)
 }
 
-func (p *Planner) streamSubscription(ctx context.Context, in Input, key string) (providerResponse, error) {
+func (p *Planner) streamSubscription(ctx context.Context, in Input, key string, spec draftSpec) (providerResponse, error) {
 	request := struct {
 		Model        string `json:"model"`
 		Instructions string `json:"instructions"`
@@ -50,16 +50,16 @@ func (p *Planner) streamSubscription(ctx context.Context, in Input, key string) 
 		Store  bool         `json:"store"`
 		Stream bool         `json:"stream"`
 		Text   responseText `json:"text"`
-	}{Model: in.Model, Instructions: instructions, Store: false, Stream: true}
+	}{Model: in.Model, Instructions: spec.instructions, Store: false, Stream: true}
 	request.Input = append(request.Input, struct {
 		Role    string `json:"role"`
 		Content string `json:"content"`
 	}{"user", "Testing request:\n" + in.Prompt + "\n\nApplication context:\n" + in.Context})
 	format := providerRequest{}
 	format.Text.Format.Type = "json_schema"
-	format.Text.Format.Name = "qa_scenario_proposals"
+	format.Text.Format.Name = spec.name
 	format.Text.Format.Strict = true
-	format.Text.Format.Schema = p.schema
+	format.Text.Format.Schema = spec.schema
 	request.Text = format.Text
 	body, err := json.Marshal(request)
 	if err != nil {
