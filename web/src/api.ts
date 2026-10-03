@@ -290,3 +290,25 @@ export function validateScenario(input: unknown): ScenarioInput {
     expected_outcome: data.expected_outcome.trim(), approved: data.approved, steps,
   }
 }
+
+export type ChatTurn = {
+  id: string
+  sequence: number
+  project_id: string
+  prompt: string
+  status: 'pending' | 'completed' | 'error'
+  reply: string
+  proposal?: AiProposalResponse
+  run_id?: string
+  created_at: string
+}
+export type ChatPage = { turns: ChatTurn[]; has_older: boolean }
+export type ChatRunAction = 'all_approved' | 'rerun_failed'
+
+// Only explicit execution requests bypass drafting. Ambiguous requests stay with the model.
+export function chatRunCommand(prompt: string): ChatRunAction | null {
+  const text = prompt.trim().toLowerCase().replace(/[.!?]+$/, '').replace(/\s+/g, ' ')
+  if (['run all approved checks', 'run all approved tests', 'run all checks', 'run a full check', 'run a full check of the app', 'full check'].includes(text)) return 'all_approved'
+  if (['rerun failed checks', 'rerun the failed checks', 'rerun failures', 'rerun failed tests'].includes(text)) return 'rerun_failed'
+  return null
+}

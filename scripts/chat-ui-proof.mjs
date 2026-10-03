@@ -1,0 +1,127 @@
+// Model replies are synthetic. Review/save, command turns, worker execution,
+// failed-check reruns and run-history reload use the real API and PostgreSQL.
+import assert from 'node:assert/strict';
+import { randomBytes } from 'node:crypto';
+import { resolve } from 'node:path';
+
+export async function verifyChatUI(page, api, healthyID, faultyID, scenario, waitRun, evidence, apiToken) {
+  await page.unroute('**/api/ai/config');
+  await page.unroute('**/proposals');
+  await page.route('**/api/ai/config', route => route.fulfill({ json: { provider: 'openai', models: ['fixture-model'], managed_available: false, byok_available: true } }));
+  const fixtureTurns = [];
+  let calls = 0;
+  const path = `**/api/projects/${healthyID}/chat`;
+  const proposed = { ...scenario, name: 'Chat proposed independent revenue check', approved: false };
+  await page.route(path, async route => {
+    if (route.request().method() === 'GET') {
+      const response = await route.fetch();
+      const body = await response.json();
+      await route.fulfill({ response, json: { ...body, turns: [...fixtureTurns, ...body.turns] } });
+      return;
+    }
+    calls++;
+    const input = route.request().postDataJSON();
+    assert.equal(input.consent, true);
+    assert.equal(input.model, 'fixture-model');
+    assert.equal(route.request().headers()['x-qa-provider-key'], 'synthetic-chat-key');
+    assert.equal(JSON.stringify(input).includes('synthetic-chat-key'), false);
+    assert.match(input.request_id, /^[a-f0-9]{32}$/);
+    const turn = { id: input.request_id, sequence: -100 + calls, project_id: healthyID, prompt: input.prompt, status: 'completed', reply: calls === 1 ? 'I need the expected net revenue.' : 'Review the proposed revenue check before running it.', created_at: new Date().toISOString(), proposal: { provider: 'openai', model: 'fixture-model', credential_mode: 'byok', context_sha256: 'synthetic-context', scenarios: calls === 1 ? [] : [proposed], questions: calls === 1 ? ['What should the net revenue be?'] : [], assumptions: [] } };
+    fixtureTurns.push(turn);
+    await route.fulfill({ json: turn });
+  });
+  await page.getByRole('button', { name: 'Chat', exact: true }).click();
+  await page.getByRole('heading', { name: 'What would you like to test?', exact: true }).waitFor();
+  await page.locator('.chat-model-settings > summary').click();
+  await page.getByLabel('OpenAI API key', { exact: true }).fill('synthetic-chat-key');
+  await page.getByLabel('Your message', { exact: true }).fill('Test the revenue dashboard');
+  const consent = page.getByRole('checkbox', { name: /I agree to send this message/ });
+  assert.equal(await page.getByRole('button', { name: 'Send message', exact: true }).isEnabled(), false);
+  await consent.check();
+  await page.getByRole('button', { name: 'Send message', exact: true }).click();
+  await page.getByText('What should the net revenue be?', { exact: true }).waitFor();
+  assert.equal(await page.getByLabel('OpenAI API key', { exact: true }).inputValue(), '');
+  assert.equal(await consent.isChecked(), false);
+  await page.getByLabel('Your message', { exact: true }).fill('Paid 150000 less refund 10000 gives 140000; cancelled 90000 is excluded.');
+  await page.getByRole('textbox', { name: /^Application context/ }).fill('Known sample requirements and browser test IDs are supplied for this fixture.');
+  await page.getByLabel('OpenAI API key', { exact: true }).fill('synthetic-chat-key');
+  await consent.check();
+  await page.getByRole('button', { name: 'Send message', exact: true }).click();
+  await page.getByRole('heading', { name: proposed.name, exact: true }).waitFor();
+  await page.getByRole('button', { name: 'Review check', exact: true }).click();
+  assert.equal(await page.getByRole('checkbox', { name: 'Approve this scenario for runs', exact: true }).isChecked(), false);
+  await page.getByRole('button', { name: 'Create scenario', exact: true }).click();
+  await page.getByRole('dialog').waitFor({ state: 'hidden' });
+  const unapproved = (await api(`/api/projects/${healthyID}/scenarios`)).find(item => item.name === proposed.name);
+  assert.equal(unapproved.approved, false);
+  await api(`/api/projects/${healthyID}/chat/runs`, { request_id: randomBytes(16).toString('hex'), prompt: 'Run unapproved draft', action: 'selected', scenario_ids: [unapproved.id], mode: 'blocking' }, { status: 409 });
+  await page.getByRole('button', { name: 'Review check', exact: true }).click();
+  await page.getByLabel('Scenario name', { exact: false }).fill('Chat reviewed revenue check');
+  await page.getByRole('checkbox', { name: 'Approve this scenario for runs', exact: true }).check();
+  await page.getByRole('checkbox', { name: /I reviewed the expected outcome/ }).check();
+  await page.getByRole('button', { name: 'Create scenario', exact: true }).click();
+  await page.getByRole('dialog').waitFor({ state: 'hidden' });
+  const reviewed = (await api(`/api/projects/${healthyID}/scenarios`)).find(item => item.name === 'Chat reviewed revenue check');
+  assert.equal(reviewed.approved, true);
+  assert.deepEqual(reviewed.steps, scenario.steps);
+  assert.equal(reviewed.expected_outcome, scenario.expected_outcome);
+  await page.getByRole('button', { name: 'Run this check', exact: true }).click();
+  await page.getByRole('region', { name: 'Chat run results', exact: true }).waitFor();
+  let history = await api(`/api/projects/${healthyID}/chat`);
+  const selected = history.turns.at(-1);
+  assert.ok(selected.run_id);
+  assert.equal((await waitRun(selected.run_id)).status, 'passed');
+  await page.locator('.chat-run-head .pill-passed').first().waitFor();
+  await page.getByLabel('Your message', { exact: true }).fill('Run all approved checks');
+  assert.equal(await consent.isChecked(), false);
+  await page.getByRole('button', { name: 'Send and run checks', exact: true }).click();
+  await page.getByLabel('Your message', { exact: true }).waitFor({ state: 'visible' });
+  for (let i = 0; i < 50; i++) {
+    history = await api(`/api/projects/${healthyID}/chat`);
+    if (history.turns.length === 2) break;
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  const all = history.turns.at(-1);
+  const allRun = await waitRun(all.run_id);
+  const approved = (await api(`/api/projects/${healthyID}/scenarios`)).filter(item => item.approved);
+  assert.equal(allRun.scenarios.length, approved.length);
+  // This project deliberately contains an approved missing-secret fixture.
+  assert.equal(allRun.status, 'blocked');
+  assert.equal(calls, 2, 'Run commands must not call a model');
+  await page.locator('.chat-run-head .pill-blocked').first().waitFor();
+  await page.locator('.chat-model-settings > summary').click();
+  await page.screenshot({ path: resolve(evidence, 'chat-desktop.png'), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'Mobile chat must fit the viewport');
+  await page.locator('.chat-agent-message').last().screenshot({ path: resolve(evidence, 'chat-mobile.png') });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.unroute(path);
+  await page.reload();
+  await page.getByLabel('API token', { exact: true }).fill(apiToken);
+  await page.getByRole('button', { name: 'Open workspace', exact: true }).click();
+  await page.getByRole('button', { name: 'Chat', exact: true }).click();
+  await page.getByText('Run all approved checks', { exact: true }).last().waitFor();
+  assert.equal(await page.getByRole('region', { name: 'Chat run results', exact: true }).count(), 2, 'Real command history survives reload');
+  await page.getByRole('button', { name: 'Faulty correctness proof', exact: true }).click();
+  await page.getByRole('button', { name: 'Chat', exact: true }).click();
+  assert.equal(await page.locator('.chat-user-message').count(), 0, 'Conversation is scoped to project');
+  await page.getByLabel('Chat run mode', { exact: true }).selectOption('blocking');
+  await page.getByLabel('Your message', { exact: true }).fill('Run a full check');
+  await page.getByRole('button', { name: 'Send and run checks', exact: true }).click();
+  await page.getByRole('region', { name: 'Chat run results', exact: true }).waitFor();
+  const faultyTurn = (await api(`/api/projects/${faultyID}/chat`)).turns.at(-1);
+  const failed = await waitRun(faultyTurn.run_id);
+  assert.equal(failed.status, 'failed');
+  assert.equal(failed.gate, 'fail');
+  await page.getByRole('button', { name: 'Rerun failed checks', exact: true }).waitFor();
+  await page.getByRole('button', { name: 'Rerun failed checks', exact: true }).click();
+  await page.getByRole('region', { name: 'Chat run results', exact: true }).nth(1).waitFor();
+  const rerunTurn = (await api(`/api/projects/${faultyID}/chat`)).turns.at(-1);
+  const rerun = await waitRun(rerunTurn.run_id);
+  assert.equal(rerun.status, 'failed');
+  assert.deepEqual(rerun.scenarios.map(item => item.id), failed.results.filter(item => item.status === 'failed').map(item => item.scenario_id));
+  for (const check of rerun.scenarios) assert.equal(check.expected_outcome, failed.scenarios.find(item => item.id === check.id).expected_outcome);
+  await page.getByRole('button', { name: 'Full report', exact: true }).last().click();
+  await page.getByRole('heading', { name: 'Runs & results', exact: true }).waitFor();
+  return { name: 'Chat questions, follow-ups and review (synthetic model), real approved execution, all-check commands, persisted run conversation, project isolation and failed-only reruns', status: 'passed' };
+}

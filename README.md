@@ -103,6 +103,10 @@ bin/qa discover --project PROJECT_ID --start-path /dashboard \
 
 `--json` writes the terminal discovery object to stdout and progress to stderr. Exit 0 means observation completed, 1 means error/cancellation, and 2 means client or transport failure. This command does not change approved checks or decide a release gate.
 
+## Testing chat
+
+Open **Chat** in a project to describe a feature, answer follow-up questions, review proposed checks and follow browser results in one conversation. Run all approved checks or rerun failed assertions directly from chat. New model-generated checks still require review and approval. Conversation history survives reload; model sharing requires explicit consent. See [the chat workflow, limits and verification](docs/chat.md).
+
 ## AI proposals
 
 For local ChatGPT subscription access, set `QA_CHATGPT_ENABLED=true`, restart the API, and choose **ChatGPT subscription → Continue with ChatGPT** in the proposal panel. Models come from the connected account; no API key is needed. See [connection setup, limits, and verification](docs/chatgpt-subscription.md).

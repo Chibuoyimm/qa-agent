@@ -65,6 +65,9 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("POST /api/ai/chatgpt/disconnect", a.authorize(a.apiToken, a.chatGPTDisconnect))
 	mux.Handle("GET /api/ai/chatgpt/models", a.authorize(a.apiToken, a.chatGPTModels))
 	mux.Handle("POST /api/projects/{id}/proposals", a.authorize(a.apiToken, a.propose))
+	mux.Handle("GET /api/projects/{id}/chat", a.authorize(a.apiToken, a.listChat))
+	mux.Handle("POST /api/projects/{id}/chat", a.authorize(a.apiToken, a.chatProposal))
+	mux.Handle("POST /api/projects/{id}/chat/runs", a.authorize(a.apiToken, a.chatRun))
 	mux.Handle("POST /api/projects/{id}/repositories/sync", a.authorize(a.apiToken, a.syncRepository))
 	mux.Handle("GET /api/projects/{id}/repositories", a.authorize(a.apiToken, a.listRepositories))
 	mux.Handle("GET /api/projects/{id}/repositories/{snapshot_id}", a.authorize(a.apiToken, a.getRepository))
@@ -77,7 +80,7 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("POST /api/worker/discoveries/{id}/complete", a.authorize(a.workerToken, a.completeDiscovery))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		deadline := 25 * time.Second
-		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/proposals") {
+		if r.Method == http.MethodPost && (strings.HasSuffix(r.URL.Path, "/proposals") || strings.HasSuffix(r.URL.Path, "/chat")) {
 			deadline = 95 * time.Second
 		} else if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/repositories/sync") {
 			deadline = 50 * time.Second
@@ -214,36 +217,8 @@ func (a *API) propose(w http.ResponseWriter, r *http.Request) {
 	}
 	key := r.Header.Get("X-QA-Provider-Key")
 	in.WorkspaceID = r.Header.Get("X-QA-Anthropic-Workspace")
-	if err := a.planner.Validate(in, key); err != nil {
-		a.fail(w, err)
-		return
-	}
-	if _, err := a.store.GetProject(r.Context(), r.PathValue("id")); err != nil {
-		a.fail(w, err)
-		return
-	}
-	selected, err := a.store.SelectRepositorySnapshots(r.Context(), r.PathValue("id"), in.RepositorySnapshotIDs)
+	in, selected, err := a.prepareProposal(r.Context(), r.PathValue("id"), in, key)
 	if err != nil {
-		a.fail(w, err)
-		return
-	}
-	var discovery *qa.Discovery
-	if in.DiscoveryID != "" {
-		selectedDiscovery, err := a.store.SelectDiscovery(r.Context(), r.PathValue("id"), in.DiscoveryID)
-		if err != nil {
-			a.fail(w, err)
-			return
-		}
-		discovery = &selectedDiscovery
-	}
-	if len(selected) > 0 || discovery != nil {
-		in.Context, err = assembleProposalContext(in.Context, selected, discovery)
-		if err != nil {
-			a.fail(w, err)
-			return
-		}
-	}
-	if err := a.planner.Validate(in, key); err != nil {
 		a.fail(w, err)
 		return
 	}
@@ -253,10 +228,45 @@ func (a *API) propose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, snapshot := range selected {
-		result.RepositorySnapshots = append(result.RepositorySnapshots, snapshot.RepositorySummary)
+		result.RepositorySnapshots = append(result.RepositorySnapshots, snapshot)
 	}
 	result.DiscoveryID = in.DiscoveryID
 	writeJSON(w, http.StatusOK, result)
+}
+
+func (a *API) prepareProposal(ctx context.Context, projectID string, in planner.Input, key string) (planner.Input, []qa.RepositorySummary, error) {
+	if err := a.planner.Validate(in, key); err != nil {
+		return in, nil, err
+	}
+	if _, err := a.store.GetProject(ctx, projectID); err != nil {
+		return in, nil, err
+	}
+	selected, err := a.store.SelectRepositorySnapshots(ctx, projectID, in.RepositorySnapshotIDs)
+	if err != nil {
+		return in, nil, err
+	}
+	var discovery *qa.Discovery
+	if in.DiscoveryID != "" {
+		selectedDiscovery, err := a.store.SelectDiscovery(ctx, projectID, in.DiscoveryID)
+		if err != nil {
+			return in, nil, err
+		}
+		discovery = &selectedDiscovery
+	}
+	if len(selected) > 0 || discovery != nil {
+		in.Context, err = assembleProposalContext(in.Context, selected, discovery)
+		if err != nil {
+			return in, nil, err
+		}
+	}
+	if err := a.planner.Validate(in, key); err != nil {
+		return in, nil, err
+	}
+	summaries := []qa.RepositorySummary{}
+	for _, snapshot := range selected {
+		summaries = append(summaries, snapshot.RepositorySummary)
+	}
+	return in, summaries, nil
 }
 
 func assembleProposalContext(operatorContext string, selected []qa.RepositorySnapshot, discovery *qa.Discovery) (string, error) {

@@ -75,3 +75,5 @@ jobs:
             artifacts/integration-*/anthropic-provider-*.png
             artifacts/integration-*/google-provider-*.png
             artifacts/integration-*/opencode-provider-*.png
+            artifacts/integration-*/chat-desktop.png
+            artifacts/integration-*/chat-mobile.png

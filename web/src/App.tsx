@@ -3,10 +3,11 @@ import {
   Activity, AlertCircle, ArrowDownRight, ArrowRight, Check, CheckCircle2,
   ChevronDown, ChevronRight, CircleDashed, Clock3, Code2, Compass, FileJson2,
   FolderOpen, HelpCircle, KeyRound, Layers3, LoaderCircle, LockKeyhole,
-  Menu, MoreHorizontal, Play, Plus, RefreshCw, Rocket, ShieldCheck, ShieldX,
+  Menu, MessageSquare, MoreHorizontal, Play, Plus, RefreshCw, Rocket, ShieldCheck, ShieldX,
   Sparkles, Square, Terminal, Trash2, X,
 } from 'lucide-react'
 import AiProposals from './AiProposals'
+import ChatWorkspace from './ChatWorkspace'
 import RepositorySnapshots from './RepositorySnapshots'
 import Discoveries from './Discoveries'
 import Releases from './Releases'
@@ -17,7 +18,7 @@ import {
   type Step, type StepAction,
 } from './api'
 
-type Page = 'overview' | 'scenarios' | 'repositories' | 'discoveries' | 'runs' | 'releases'
+type Page = 'chat' | 'overview' | 'scenarios' | 'repositories' | 'discoveries' | 'runs' | 'releases'
 type EditorMode = 'guided' | 'json'
 
 const statusText: Record<string, string> = {
@@ -237,6 +238,7 @@ function App() {
   const [mode, setMode] = useState<RunMode>('advisory')
   const [editorOpen, setEditorOpen] = useState(false)
   const [editorDraft, setEditorDraft] = useState<ScenarioInput | null>(null)
+  const [chatSavedScenario, setChatSavedScenario] = useState<Scenario | null>(null)
   const [editorSource, setEditorSource] = useState<'new' | 'copy' | 'proposal'>('new')
   const [aiOpen, setAiOpen] = useState(false)
   const [creatingProject, setCreatingProject] = useState(false)
@@ -364,6 +366,7 @@ function App() {
     if (scenario.project_id !== activeProject.current) return
     setScenarios(previous => [...previous, scenario])
     if (scenario.approved) setSelectedScenarioIds(previous => [...previous, scenario.id])
+    if (page === 'chat') setChatSavedScenario(scenario)
     setNotice('Scenario created.')
   }
   function toggleScenario(id: string) { setSelectedScenarioIds(previous => previous.includes(id) ? previous.filter(item => item !== id) : [...previous, id]) }
@@ -376,11 +379,11 @@ function App() {
   return <div className="app-shell">
     <aside className={`sidebar ${mobileNav ? 'sidebar-open' : ''}`}><div className="sidebar-top"><div className="brand"><span className="brand-mark"><Activity size={20} strokeWidth={2.5} /></span><span>qa<span className="brand-accent">agent</span><small>WORKSPACE</small></span></div><button className="icon-button mobile-close" onClick={() => setMobileNav(false)} aria-label="Close navigation"><X size={20} /></button></div>
       <div className="sidebar-section-label">WORKSPACE</div><div className="project-switcher"><div className="project-avatar">{project?.name?.charAt(0).toUpperCase() ?? 'P'}</div><div><strong>{project?.name ?? 'No project'}</strong><small>{project ? new URL(project.base_url).host : 'Create your first project'}</small></div><ChevronDown size={15} /></div>
-      <div className="sidebar-section-label nav-label">NAVIGATION</div><nav aria-label="Main navigation"><button className={page === 'overview' ? 'nav-item active' : 'nav-item'} onClick={() => selectPage('overview')}><Layers3 size={18} />Overview</button><button className={page === 'scenarios' ? 'nav-item active' : 'nav-item'} onClick={() => selectPage('scenarios')}><ShieldCheck size={18} />Scenarios{scenarios.length > 0 && <span className="nav-count">{scenarios.length}</span>}</button><button className={page === 'repositories' ? 'nav-item active' : 'nav-item'} onClick={() => selectPage('repositories')}><Code2 size={18} />Repository</button><button className={page === 'discoveries' ? 'nav-item active' : 'nav-item'} onClick={() => selectPage('discoveries')}><Compass size={18} />Discover</button><button className={page === 'runs' ? 'nav-item active' : 'nav-item'} onClick={() => selectPage('runs')}><Play size={18} />Runs{runs.length > 0 && <span className="nav-count">{runs.length}</span>}</button><button className={page === 'releases' ? 'nav-item active' : 'nav-item'} onClick={() => selectPage('releases')}><Rocket size={18} />Releases</button></nav>
+      <div className="sidebar-section-label nav-label">NAVIGATION</div><nav aria-label="Main navigation"><button className={page === 'chat' ? 'nav-item active' : 'nav-item'} onClick={() => selectPage('chat')}><MessageSquare size={18} />Chat</button><button className={page === 'overview' ? 'nav-item active' : 'nav-item'} onClick={() => selectPage('overview')}><Layers3 size={18} />Overview</button><button className={page === 'scenarios' ? 'nav-item active' : 'nav-item'} onClick={() => selectPage('scenarios')}><ShieldCheck size={18} />Scenarios{scenarios.length > 0 && <span className="nav-count">{scenarios.length}</span>}</button><button className={page === 'repositories' ? 'nav-item active' : 'nav-item'} onClick={() => selectPage('repositories')}><Code2 size={18} />Repository</button><button className={page === 'discoveries' ? 'nav-item active' : 'nav-item'} onClick={() => selectPage('discoveries')}><Compass size={18} />Discover</button><button className={page === 'runs' ? 'nav-item active' : 'nav-item'} onClick={() => selectPage('runs')}><Play size={18} />Runs{runs.length > 0 && <span className="nav-count">{runs.length}</span>}</button><button className={page === 'releases' ? 'nav-item active' : 'nav-item'} onClick={() => selectPage('releases')}><Rocket size={18} />Releases</button></nav>
       <div className="sidebar-projects"><div className="sidebar-section-label">PROJECTS <button className="icon-button small" aria-label="Create project" onClick={openProjectForm}><Plus size={15} /></button></div>{projects.map(item => <button key={item.id} className={`project-link ${item.id === projectId ? 'selected' : ''}`} onClick={() => { setFocusSnapshotId(''); setProjectId(item.id); selectPage('overview') }}><span className="project-dot" />{item.name}</button>)}</div>
       <div className="sidebar-bottom"><div className="connection"><span className={`connection-dot connection-${connectionState}`} /><span>{connectionState === 'connecting' ? 'Connecting to API' : connectionState === 'connected' ? 'API connected' : 'API unavailable'}</span></div><button className="sidebar-signout" onClick={disconnect}><KeyRound size={16} />Disconnect token</button></div>
     </aside>
-    <main className="main"><header className="topbar"><button className="icon-button mobile-menu" onClick={() => setMobileNav(true)} aria-label="Open navigation"><Menu size={21} /></button><div className="breadcrumb">Workspace <ChevronRight size={15} /> <strong>{page === 'overview' ? 'Overview' : page === 'scenarios' ? 'Scenarios' : page === 'repositories' ? 'Repository' : page === 'discoveries' ? 'Discover' : page === 'releases' ? 'Releases' : 'Runs'}</strong></div><div className="topbar-right"><span className="environment"><span />LOCAL ENVIRONMENT</span><span className="topbar-avatar">OP</span></div></header>
+    <main className="main"><header className="topbar"><button className="icon-button mobile-menu" onClick={() => setMobileNav(true)} aria-label="Open navigation"><Menu size={21} /></button><div className="breadcrumb">Workspace <ChevronRight size={15} /> <strong>{page === 'chat' ? 'Chat' : page === 'overview' ? 'Overview' : page === 'scenarios' ? 'Scenarios' : page === 'repositories' ? 'Repository' : page === 'discoveries' ? 'Discover' : page === 'releases' ? 'Releases' : 'Runs'}</strong></div><div className="topbar-right"><span className="environment"><span />LOCAL ENVIRONMENT</span><span className="topbar-avatar">OP</span></div></header>
       <div className="content">
         {notice && <div className="toast"><Check size={16} />{notice}<button aria-label="Dismiss notice" onClick={() => setNotice('')}><X size={14} /></button></div>}
         {projectsError && <ErrorBanner message={projectsError} onRetry={() => void loadProjects(token)} />}
@@ -389,6 +392,7 @@ function App() {
           {project && !showProjectForm && <>
             {dataError && <ErrorBanner message={dataError} onRetry={() => void loadProjectData(token, projectId)} />}
             {dataLoading ? <div className="loading-state"><LoaderCircle className="spin" size={24} />Loading workspace…</div> : <>
+              {page === 'chat' && <ChatWorkspace key={projectId} token={token} project={project} scenarios={scenarios} savedScenario={chatSavedScenario} onReview={scenario => openEditor(scenario, 'proposal')} onOpenRun={id => { setSelectedRunId(id); setPage('runs'); void loadProjectData(token, projectId) }} onRunQueued={() => { void api<Run[]>(token, `/api/projects/${encodeURIComponent(projectId)}/runs`).then(items => { if (activeProject.current === projectId) setRuns(items) }).catch(err => { if (activeProject.current === projectId && activeToken.current === token) setDataError(err instanceof Error ? err.message : 'Could not refresh runs') }) }} />}
               {page === 'overview' && <><div className="page-heading"><div><div className="eyebrow">PROJECT OVERVIEW</div><h1>{project.name}</h1><p>One place to track configured coverage and the latest browser proof.</p></div><button className="button button-outline" onClick={() => void loadProjectData(token, projectId)}><RefreshCw size={16} />Refresh</button></div>
                 <div className="target-strip"><span className="target-icon"><Terminal size={18} /></span><div><small>TARGET ORIGIN</small><strong>{project.base_url}</strong></div><span className="target-type">CONTROLLED APP</span></div>
                 <div className="metric-grid"><div className="metric-card"><span>Configured scenarios</span><strong>{scenarios.length}</strong><small>{scenarios.length ? 'Defined checks in this project' : 'Start with your first check'}</small><Layers3 size={20} /></div><div className="metric-card"><span>Approved for runs</span><strong>{coverage.approved}</strong><small>Reviewed outcome and assertions</small><ShieldCheck size={20} /></div><div className="metric-card"><span>Awaiting approval</span><strong>{coverage.unapproved}</strong><small>Cannot be included in a run</small><Clock3 size={20} /></div><div className="metric-card"><span>Latest run</span><strong className="metric-status">{latestRun ? statusText[latestRun.status] : 'None yet'}</strong><small>{latestRun ? formatDate(latestRun.created_at) : 'No browser execution yet'}</small><Activity size={20} /></div></div>

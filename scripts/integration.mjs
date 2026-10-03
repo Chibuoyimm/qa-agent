@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { verifyChatGPTUI } from './chatgpt-ui-proof.mjs';
 import { verifyProvidersUI } from './providers-ui-proof.mjs';
 import { verifyOpenCodeUI } from './opencode-ui-proof.mjs';
+import { verifyChatUI } from './chat-ui-proof.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const key = `${Date.now()}-${randomBytes(3).toString('hex')}`;
@@ -402,6 +403,7 @@ try {
     observations.push(await verifyChatGPTUI(page, api, healthy.project.id, templates[0], evidence));
     observations.push(await verifyProvidersUI(page, api, healthy.project.id, faulty.project.id, templates[0], waitRun, evidence));
     observations.push(await verifyOpenCodeUI(page, api, healthy.project.id, faulty.project.id, templates[0], waitRun, evidence));
+    observations.push(await verifyChatUI(page, api, healthy.project.id, faulty.project.id, templates[0], waitRun, evidence, apiToken));
     assert.deepEqual(errors, [], 'AI proposal flow must not throw browser errors');
     assert.equal(await page.evaluate(() => localStorage.length + sessionStorage.length), 0, 'Operator token must not enter browser storage');
     await page.reload();

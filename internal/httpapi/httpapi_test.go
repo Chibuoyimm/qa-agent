@@ -583,4 +583,6 @@ func TestHTTPBoundary(t *testing.T) {
 		}
 	}
 
+	t.Run("chat conversation", func(t *testing.T) { verifyChatHTTP(t, store) })
+
 }

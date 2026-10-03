@@ -68,18 +68,7 @@ type Config struct {
 	BYOKAvailable    bool             `json:"byok_available"`
 }
 
-type Result struct {
-	CredentialMode      string                 `json:"credential_mode"`
-	ChatGPTProfileID    string                 `json:"chatgpt_profile_id,omitempty"`
-	Provider            string                 `json:"provider"`
-	Model               string                 `json:"model"`
-	ContextSHA256       string                 `json:"context_sha256"`
-	Scenarios           []qa.ScenarioInput     `json:"scenarios"`
-	Questions           []string               `json:"questions"`
-	Assumptions         []string               `json:"assumptions"`
-	RepositorySnapshots []qa.RepositorySummary `json:"repository_snapshots"`
-	DiscoveryID         string                 `json:"discovery_id,omitempty"`
-}
+type Result = qa.Proposal
 
 type Planner struct {
 	ChatGPT   *chatgpt.Client
