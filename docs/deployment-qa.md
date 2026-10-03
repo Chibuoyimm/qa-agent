@@ -35,13 +35,31 @@ The manifest is strict JSON, at most 64 KiB:
 
 Use a stable deployment key across job retries, with letters, digits, underscores, and hyphens (1–200 characters). Do not include the retry attempt number. Use a new key for a new deployment or an intentionally new execution. Select 1–50 unique approved scenarios and 1–2 repositories with distinct `frontend`/`backend` roles. Each revision must be a full 40-character hexadecimal commit SHA; each import requires 1–20 explicitly selected safe source paths. Credentials belong in `QA_API_TOKEN` and optional `QA_GITHUB_TOKEN`, never in the manifest. `QA_API_BASE_URL` identifies the QA API, separately from the deployment URL.
 
-The command first looks up the deployment key. An existing matching release resumes polling the same run without readiness checks or repository imports. A changed target, mode, ordered scenario selection, repository revision, or selected paths under the same key is an error. A new release waits for HTTP 200 from the readiness path, imports the exact commits, creates the release, and waits for its run. Readiness requests carry no QA/GitHub credentials and do not follow redirects. The overall timeout covers readiness, imports, creation, and polling. Timeout does not cancel a remote run; retry with the same manifest to resume.
+The command first looks up the deployment key. An existing matching release resumes polling the same run without readiness checks or repository imports. A changed target, mode, ordered scenario selection, repository revision, or selected paths under the same key is an error. A new release waits for HTTP 200 from the readiness path, imports the exact commits, creates the release, and waits for its run. Readiness requests carry no QA/repository credentials and do not follow redirects. The overall timeout covers readiness, imports, creation, and polling. Timeout does not cancel a remote run; retry with the same manifest to resume.
 
 API responses are limited to 4 MiB in the command; very large scenario definitions that exceed that response limit return a client error. A failed attempt before release creation can leave imported snapshots, but cannot leave an unrecorded queued run. Concurrent attempts may each import sources before one wins release creation; only one run is created. Retries after creation reuse the saved snapshots as well.
 
 Exit 0 means pass (or a warning in advisory mode); exit 1 means a failed blocking gate; exit 2 means invalid configuration, transport failure, timeout, or an inconsistent API result. With `--json`, stdout contains one terminal release JSON object; progress goes to stderr.
 
 The supplied commits record what the pipeline says it deployed. HTTP readiness alone does not verify the deployed application's build identity. Deploy jobs must supply their actual built revisions; applications can separately expose and verify build metadata before this command.
+
+## Azure Repos source revisions
+
+The release CLI supports Azure Repos sources as well as GitHub. Set `provider` to `azure` and use the canonical repository URL in each Azure source entry:
+
+```json
+{
+  "provider": "azure",
+  "repository": "https://dev.azure.com/organization/project/_git/app",
+  "role": "frontend",
+  "commit_sha": "0123456789abcdef0123456789abcdef01234567",
+  "paths": ["src/App.tsx", "src/api.ts"]
+}
+```
+
+Supply private Azure access through the secret environment variable `QA_AZURE_PAT` (Code Read), and GitHub access through `QA_GITHUB_TOKEN`. Each import sends only its own provider credential; readiness, release creation, and polling receive neither. One release may combine a GitHub frontend and Azure backend, or the reverse. Omitted provider continues to mean GitHub. Existing GitHub deployment keys and request hashes retain their identity after the upgrade. Azure provider mismatches are rejected during import and release resume.
+
+The `qa release` command can be invoked from Azure Pipelines after deployment with the actual built commit SHA and staging URL. This adds Azure repository support to the existing release command; no automatic Azure pipeline installation or service-hook registration is performed.
 
 ## GitHub Actions setup
 

@@ -58,6 +58,7 @@ export type Run = {
 }
 
 export type ReleaseRepository = {
+  provider?: RepositoryProvider
   snapshot_id: string
   repository: string
   role: RepositoryRole
@@ -230,8 +231,10 @@ export type Discovery = {
   finished_at?: string
 }
 
+export type RepositoryProvider = 'github' | 'azure'
 export type RepositoryRole = 'frontend' | 'backend'
 export type RepositorySnapshotSummary = {
+  provider?: RepositoryProvider
   id: string
   project_id: string
   repository: string

@@ -32,6 +32,7 @@ type releaseManifest struct {
 }
 
 type releaseManifestSource struct {
+	Provider   string   `json:"provider,omitempty"`
 	Repository string   `json:"repository"`
 	Role       string   `json:"role"`
 	CommitSHA  string   `json:"commit_sha"`
@@ -65,9 +66,9 @@ func executeRelease(ctx context.Context, args []string, getenv func(string) stri
 		fmt.Fprintln(errOut, "QA_API_BASE_URL must be an HTTP(S) origin without credentials, query, or path.")
 		return 2
 	}
-	apiToken, githubToken := getenv("QA_API_TOKEN"), getenv("QA_GITHUB_TOKEN")
-	if !safeReleaseToken(apiToken) || (githubToken != "" && !safeReleaseToken(githubToken)) {
-		fmt.Fprintln(errOut, "Set valid QA_API_TOKEN and optional QA_GITHUB_TOKEN environment values.")
+	apiToken, githubToken, azurePAT := getenv("QA_API_TOKEN"), getenv("QA_GITHUB_TOKEN"), getenv("QA_AZURE_PAT")
+	if !safeReleaseToken(apiToken) || (githubToken != "" && !safeReleaseToken(githubToken)) || (azurePAT != "" && !safeReleaseToken(azurePAT)) {
+		fmt.Fprintln(errOut, "Set valid QA_API_TOKEN and optional QA_GITHUB_TOKEN / QA_AZURE_PAT environment values.")
 		return 2
 	}
 
@@ -80,7 +81,7 @@ func executeRelease(ctx context.Context, args []string, getenv func(string) stri
 	lookup := endpoint + "/by-key/" + url.PathEscape(manifest.DeploymentKey)
 
 	var release qa.Release
-	status, body, err := releaseAPIRequest(ctx, apiClient, http.MethodGet, lookup, apiToken, "", nil)
+	status, body, err := releaseAPIRequest(ctx, apiClient, http.MethodGet, lookup, apiToken, "", "", nil)
 	if err != nil {
 		fmt.Fprintln(errOut, err)
 		return 2
@@ -100,19 +101,18 @@ func executeRelease(ctx context.Context, args []string, getenv func(string) stri
 		}
 		imports := make(map[string]qa.RepositorySnapshot, len(manifest.Repositories))
 		for _, source := range manifest.Repositories {
-			payload, err := json.Marshal(struct {
-				Repository string   `json:"repository"`
-				Ref        string   `json:"ref"`
-				Role       string   `json:"role"`
-				Paths      []string `json:"paths"`
-			}{source.Repository, source.CommitSHA, source.Role, source.Paths})
+			payload, err := json.Marshal(repository.Input{Provider: source.Provider, Repository: source.Repository, Ref: source.CommitSHA, Role: source.Role, Paths: source.Paths})
 			if err != nil {
 				fmt.Fprintln(errOut, "Could not encode repository import.")
 				return 2
 			}
 			fmt.Fprintf(errOut, "Importing %s at %s.\n", source.Role, source.CommitSHA)
 			importEndpoint := strings.TrimRight(apiBase, "/") + "/api/projects/" + url.PathEscape(manifest.ProjectID) + "/repositories/sync"
-			status, body, err = releaseAPIRequest(ctx, apiClient, http.MethodPost, importEndpoint, apiToken, githubToken, payload)
+			repositoryToken := githubToken
+			if source.Provider == "azure" {
+				repositoryToken = azurePAT
+			}
+			status, body, err = releaseAPIRequest(ctx, apiClient, http.MethodPost, importEndpoint, apiToken, source.Provider, repositoryToken, payload)
 			if err != nil {
 				fmt.Fprintln(errOut, err)
 				return 2
@@ -132,6 +132,7 @@ func executeRelease(ctx context.Context, args []string, getenv func(string) stri
 		for _, source := range manifest.Repositories {
 			repositories = append(repositories, qa.ReleaseRepositoryInput{
 				SnapshotID: imports[source.Role].ID,
+				Provider:   source.Provider,
 				Repository: source.Repository,
 				Role:       source.Role,
 				CommitSHA:  source.CommitSHA,
@@ -148,7 +149,7 @@ func executeRelease(ctx context.Context, args []string, getenv func(string) stri
 			fmt.Fprintln(errOut, "Could not encode release request.")
 			return 2
 		}
-		status, body, err = releaseAPIRequest(ctx, apiClient, http.MethodPost, endpoint, apiToken, "", payload)
+		status, body, err = releaseAPIRequest(ctx, apiClient, http.MethodPost, endpoint, apiToken, "", "", payload)
 		if err != nil {
 			fmt.Fprintln(errOut, err)
 			return 2
@@ -202,7 +203,7 @@ func executeRelease(ctx context.Context, args []string, getenv func(string) stri
 			fmt.Fprintln(errOut, "Release wait timed out or was interrupted. The remote run may still be active; retry with the same manifest.")
 			return 2
 		}
-		status, body, err = releaseAPIRequest(ctx, apiClient, http.MethodGet, endpoint+"/"+url.PathEscape(id), apiToken, "", nil)
+		status, body, err = releaseAPIRequest(ctx, apiClient, http.MethodGet, endpoint+"/"+url.PathEscape(id), apiToken, "", "", nil)
 		if err != nil {
 			fmt.Fprintln(errOut, err)
 			return 2
@@ -272,12 +273,13 @@ func readReleaseManifest(path string) (releaseManifest, error) {
 		source := &manifest.Repositories[i]
 		if (source.Role != "frontend" && source.Role != "backend") || seenRoles[source.Role] ||
 			!hexString(source.CommitSHA, 40) || repository.Validate(repository.Input{
+			Provider:   source.Provider,
 			Repository: source.Repository,
 			Ref:        source.CommitSHA,
 			Role:       source.Role,
 			Paths:      source.Paths,
 		}, "") != nil {
-			return releaseManifest{}, errors.New("release repositories need distinct roles, owner/name, full commit SHAs, and 1–20 paths")
+			return releaseManifest{}, errors.New("release repositories need distinct roles, valid provider/repository, full commit SHAs, and 1–20 paths")
 		}
 		seenRoles[source.Role] = true
 		source.CommitSHA = strings.ToLower(source.CommitSHA)
@@ -332,14 +334,18 @@ func hexString(value string, length int) bool {
 	return true
 }
 
-func releaseAPIRequest(ctx context.Context, client *http.Client, method, endpoint, apiToken, githubToken string, payload []byte) (int, []byte, error) {
+func releaseAPIRequest(ctx context.Context, client *http.Client, method, endpoint, apiToken, provider, repositoryToken string, payload []byte) (int, []byte, error) {
 	req, err := http.NewRequestWithContext(ctx, method, endpoint, bytes.NewReader(payload))
 	if err != nil {
 		return 0, nil, errors.New("could not construct release API request")
 	}
 	req.Header.Set("Authorization", "Bearer "+apiToken)
-	if githubToken != "" {
-		req.Header.Set("X-QA-GitHub-Token", githubToken)
+	if repositoryToken != "" {
+		header := "X-QA-GitHub-Token"
+		if provider == "azure" {
+			header = "X-QA-Azure-PAT"
+		}
+		req.Header.Set(header, repositoryToken)
 	}
 	if payload != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -387,7 +393,7 @@ func waitReleasePoll(ctx context.Context, poll time.Duration) error {
 }
 
 func importMatches(imported qa.RepositorySnapshot, projectID string, source releaseManifestSource) bool {
-	if !safeCLIIdentifier(imported.ID) || imported.ProjectID != projectID || imported.Repository != source.Repository ||
+	if !safeCLIIdentifier(imported.ID) || imported.ProjectID != projectID || repository.EffectiveProvider(imported.Provider) != repository.EffectiveProvider(source.Provider) || imported.Repository != source.Repository ||
 		imported.Role != source.Role || !strings.EqualFold(imported.CommitSHA, source.CommitSHA) ||
 		!hexString(imported.ContentSHA256, 64) || len(imported.Files) != len(source.Paths) {
 		return false
@@ -426,7 +432,7 @@ func releaseMatches(release qa.Release, manifest releaseManifest, imports map[st
 	}
 	for _, expected := range manifest.Repositories {
 		actual := byRole[expected.Role]
-		if actual.Role != expected.Role || actual.Repository != expected.Repository || !strings.EqualFold(actual.CommitSHA, expected.CommitSHA) || len(actual.Paths) != len(expected.Paths) {
+		if actual.Role != expected.Role || repository.EffectiveProvider(actual.Provider) != repository.EffectiveProvider(expected.Provider) || actual.Repository != expected.Repository || !strings.EqualFold(actual.CommitSHA, expected.CommitSHA) || len(actual.Paths) != len(expected.Paths) {
 			return false
 		}
 		for i, path := range actual.Paths {

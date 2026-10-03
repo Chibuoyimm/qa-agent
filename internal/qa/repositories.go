@@ -12,6 +12,7 @@ import (
 )
 
 type RepositorySummary struct {
+	Provider      string    `json:"provider"`
 	ID            string    `json:"id"`
 	ProjectID     string    `json:"project_id"`
 	Repository    string    `json:"repository"`
@@ -29,16 +30,20 @@ type RepositorySnapshot struct {
 	Files []repository.File `json:"files"`
 }
 
-const repositoryColumns = `id,project_id,repository,ref,role,commit_sha,content_sha256,file_count,total_bytes,created_at`
+const repositoryColumns = `id,project_id,provider,repository,ref,role,commit_sha,content_sha256,file_count,total_bytes,created_at`
 
 func scanRepositorySummary(row rowScanner) (RepositorySummary, error) {
 	var summary RepositorySummary
-	err := row.Scan(&summary.ID, &summary.ProjectID, &summary.Repository, &summary.Ref, &summary.Role,
+	err := row.Scan(&summary.ID, &summary.ProjectID, &summary.Provider, &summary.Repository, &summary.Ref, &summary.Role,
 		&summary.CommitSHA, &summary.ContentSHA256, &summary.FileCount, &summary.TotalBytes, &summary.CreatedAt)
 	return summary, err
 }
 
 func (s *Store) CreateRepositorySnapshot(ctx context.Context, projectID string, imported repository.Snapshot) (RepositorySnapshot, error) {
+	imported.Provider = repository.EffectiveProvider(imported.Provider)
+	if imported.Provider != "github" && imported.Provider != "azure" {
+		return RepositorySnapshot{}, fmt.Errorf("%w: unsupported repository provider", ErrInvalid)
+	}
 	actualBytes := 0
 	for _, file := range imported.Files {
 		actualBytes += len(file.Content)
@@ -59,9 +64,9 @@ func (s *Store) CreateRepositorySnapshot(ctx context.Context, projectID string, 
 		return RepositorySnapshot{}, err
 	}
 	row := s.db.QueryRow(ctx, `INSERT INTO repository_snapshots
-		(id,project_id,repository,ref,role,commit_sha,content_sha256,files,file_count,total_bytes)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING `+repositoryColumns,
-		id, projectID, imported.Repository, imported.Ref, imported.Role, imported.CommitSHA,
+		(id,project_id,provider,repository,ref,role,commit_sha,content_sha256,files,file_count,total_bytes)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING `+repositoryColumns,
+		id, projectID, imported.Provider, imported.Repository, imported.Ref, imported.Role, imported.CommitSHA,
 		imported.ContentSHA256, files, len(imported.Files), imported.TotalBytes)
 	summary, err := scanRepositorySummary(row)
 	if err != nil {
@@ -96,7 +101,7 @@ func (s *Store) GetRepositorySnapshot(ctx context.Context, projectID, snapshotID
 	var files []byte
 	err := s.db.QueryRow(ctx, `SELECT `+repositoryColumns+`,files FROM repository_snapshots
 		WHERE project_id=$1 AND id=$2`, projectID, snapshotID).Scan(&snapshot.ID, &snapshot.ProjectID,
-		&snapshot.Repository, &snapshot.Ref, &snapshot.Role, &snapshot.CommitSHA, &snapshot.ContentSHA256,
+		&snapshot.Provider, &snapshot.Repository, &snapshot.Ref, &snapshot.Role, &snapshot.CommitSHA, &snapshot.ContentSHA256,
 		&snapshot.FileCount, &snapshot.TotalBytes, &snapshot.CreatedAt, &files)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return RepositorySnapshot{}, ErrNotFound

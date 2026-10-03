@@ -16,6 +16,7 @@ import (
 )
 
 type ReleaseRepositoryInput struct {
+	Provider   string `json:"provider,omitempty"`
 	SnapshotID string `json:"snapshot_id"`
 	Repository string `json:"repository"`
 	Role       string `json:"role"`
@@ -23,6 +24,7 @@ type ReleaseRepositoryInput struct {
 }
 
 type ReleaseRepository struct {
+	Provider      string   `json:"provider,omitempty"`
 	SnapshotID    string   `json:"snapshot_id"`
 	Repository    string   `json:"repository"`
 	Role          string   `json:"role"`
@@ -148,7 +150,7 @@ func validateReleaseInput(in ReleaseInput, allowed map[string]bool) error {
 	}
 	roles := make(map[string]bool, len(in.Repositories))
 	for _, source := range in.Repositories {
-		if source.SnapshotID == "" || source.Repository == "" || (source.Role != "frontend" && source.Role != "backend") ||
+		if source.SnapshotID == "" || source.Repository == "" || (repository.EffectiveProvider(source.Provider) != "github" && source.Provider != "azure") || (source.Role != "frontend" && source.Role != "backend") ||
 			!fullCommitSHA(source.CommitSHA) || roles[source.Role] {
 			return fmt.Errorf("%w: repositories require unique roles, snapshot_id, repository, and full commit_sha", ErrInvalid)
 		}
@@ -174,16 +176,16 @@ func selectReleaseRepositories(ctx context.Context, tx pgx.Tx, projectID string,
 	for _, input := range inputs {
 		var snapshot ReleaseRepository
 		var filesJSON []byte
-		err := tx.QueryRow(ctx, `SELECT repository,role,commit_sha,content_sha256,files
+		err := tx.QueryRow(ctx, `SELECT provider,repository,role,commit_sha,content_sha256,files
 			FROM repository_snapshots WHERE project_id=$1 AND id=$2`, projectID, input.SnapshotID).
-			Scan(&snapshot.Repository, &snapshot.Role, &snapshot.CommitSHA, &snapshot.ContentSHA256, &filesJSON)
+			Scan(&snapshot.Provider, &snapshot.Repository, &snapshot.Role, &snapshot.CommitSHA, &snapshot.ContentSHA256, &filesJSON)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, fmt.Errorf("%w: a repository snapshot is not in this project", ErrInvalid)
 		}
 		if err != nil {
 			return nil, err
 		}
-		if snapshot.Repository != input.Repository || snapshot.Role != input.Role || !strings.EqualFold(snapshot.CommitSHA, input.CommitSHA) {
+		if repository.EffectiveProvider(snapshot.Provider) != repository.EffectiveProvider(input.Provider) || snapshot.Repository != input.Repository || snapshot.Role != input.Role || !strings.EqualFold(snapshot.CommitSHA, input.CommitSHA) {
 			return nil, fmt.Errorf("%w: repository details do not match the selected snapshot", ErrInvalid)
 		}
 		var files []repository.File
@@ -203,6 +205,10 @@ func selectReleaseRepositories(ctx context.Context, tx pgx.Tx, projectID string,
 				return nil, fmt.Errorf("%w: repository snapshot has invalid paths", ErrInvalid)
 			}
 		}
+		// Keep legacy GitHub release JSON and request hashes unchanged.
+		if snapshot.Provider == "github" {
+			snapshot.Provider = ""
+		}
 		snapshot.SnapshotID = input.SnapshotID
 		selected = append(selected, snapshot)
 	}
@@ -212,6 +218,7 @@ func selectReleaseRepositories(ctx context.Context, tx pgx.Tx, projectID string,
 
 func releaseRequestHash(in ReleaseInput, repositories []ReleaseRepository) (string, error) {
 	type sourceIdentity struct {
+		Provider      string   `json:"provider,omitempty"`
 		Repository    string   `json:"repository"`
 		Role          string   `json:"role"`
 		CommitSHA     string   `json:"commit_sha"`
@@ -225,7 +232,7 @@ func releaseRequestHash(in ReleaseInput, repositories []ReleaseRepository) (stri
 		Repositories []sourceIdentity `json:"repositories"`
 	}{BaseURL: in.BaseURL, Mode: in.Mode, ScenarioIDs: in.ScenarioIDs, Repositories: make([]sourceIdentity, 0, len(repositories))}
 	for _, source := range repositories {
-		identity.Repositories = append(identity.Repositories, sourceIdentity{source.Repository, source.Role, source.CommitSHA, source.ContentSHA256, source.Paths})
+		identity.Repositories = append(identity.Repositories, sourceIdentity{source.Provider, source.Repository, source.Role, source.CommitSHA, source.ContentSHA256, source.Paths})
 	}
 	encoded, err := json.Marshal(identity)
 	if err != nil {
