@@ -95,4 +95,3 @@ export function SnapshotBrowser({ token, projectId, selected = [], onSelectionCh
     </article>)}</div>}
   </div>
 }
-
