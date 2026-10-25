@@ -21,13 +21,23 @@
             "items": {
               "type": "object",
               "additionalProperties": false,
-              "required": ["action", "path", "test_id", "value", "secret_env"],
+              "required": ["action", "path", "test_id", "value", "secret_env", "locator"],
               "properties": {
                 "action": {"type": "string", "enum": ["navigate", "fill", "click", "assert_text", "assert_visible"]},
                 "path": {"type": ["string", "null"]},
                 "test_id": {"type": ["string", "null"]},
                 "value": {"type": ["string", "null"]},
-                "secret_env": {"type": ["string", "null"]}
+                "secret_env": {"type": ["string", "null"]},
+                "locator": {
+                  "type": ["object", "null"],
+                  "additionalProperties": false,
+                  "required": ["role", "name", "label"],
+                  "properties": {
+                    "role": {"type": ["string", "null"], "enum": ["button", "link", "textbox", "heading", "checkbox", "radio", "combobox", "option", "tab", "menuitem", "alert", "status", "dialog", "region", "switch", "spinbutton", "searchbox", null]},
+                    "name": {"type": ["string", "null"]},
+                    "label": {"type": ["string", "null"]}
+                  }
+                }
               }
             }
           }

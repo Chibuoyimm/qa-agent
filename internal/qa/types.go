@@ -28,11 +28,55 @@ type ProjectInput struct {
 }
 
 type Step struct {
-	Action    string  `json:"action"`
-	Path      string  `json:"path,omitempty"`
-	TestID    string  `json:"test_id,omitempty"`
-	Value     *string `json:"value,omitempty"`
-	SecretEnv *string `json:"secret_env,omitempty"`
+	Action    string          `json:"action"`
+	Path      string          `json:"path,omitempty"`
+	TestID    string          `json:"test_id,omitempty"`
+	Locator   *ElementLocator `json:"locator,omitempty"`
+	Value     *string         `json:"value,omitempty"`
+	SecretEnv *string         `json:"secret_env,omitempty"`
+}
+
+// ElementLocator uses exact accessible names; it never accepts CSS or script.
+type ElementLocator struct {
+	Role  string `json:"role,omitempty"`
+	Name  string `json:"name,omitempty"`
+	Label string `json:"label,omitempty"`
+}
+
+func (l ElementLocator) Valid() bool {
+	if l.Label != "" {
+		return l.Role == "" && l.Name == "" && validLocatorName(l.Label)
+	}
+	return validLocatorRole(l.Role) && validLocatorName(l.Name)
+}
+
+func validLocatorName(value string) bool {
+	return strings.TrimSpace(value) != "" && len(value) <= 300 && validObservationText(value, 300)
+}
+
+func validLocatorRole(role string) bool {
+	switch role {
+	case "button", "link", "textbox", "heading", "checkbox", "radio", "combobox", "option", "tab", "menuitem", "alert", "status", "dialog", "region", "switch", "spinbutton", "searchbox":
+		return true
+	}
+	return false
+}
+
+func (s Step) validTarget() bool {
+	if s.Locator != nil {
+		return s.TestID == "" && s.Locator.Valid()
+	}
+	return validTestID(s.TestID)
+}
+
+func (s Step) TargetName() string {
+	if s.Locator != nil {
+		if s.Locator.Label != "" {
+			return s.Locator.Label
+		}
+		return s.Locator.Role + " “" + s.Locator.Name + "”"
+	}
+	return s.TestID
 }
 
 type ScenarioInput struct {
@@ -167,12 +211,12 @@ func ValidateScenario(in ScenarioInput) (ScenarioInput, error) {
 func validateStep(s Step) error {
 	switch s.Action {
 	case "navigate":
-		if len(s.Path) > 2048 || !strings.HasPrefix(s.Path, "/") || strings.HasPrefix(s.Path, "//") || strings.ContainsAny(s.Path, "?#\\") || strings.Contains(s.Path, "..") || s.TestID != "" || s.Value != nil || s.SecretEnv != nil {
+		if len(s.Path) > 2048 || !strings.HasPrefix(s.Path, "/") || strings.HasPrefix(s.Path, "//") || strings.ContainsAny(s.Path, "?#\\") || strings.Contains(s.Path, "..") || s.TestID != "" || s.Locator != nil || s.Value != nil || s.SecretEnv != nil {
 			return errors.New("navigate requires only a safe same-origin path")
 		}
 	case "fill":
-		if s.Path != "" || !validTestID(s.TestID) || (s.Value == nil) == (s.SecretEnv == nil) {
-			return errors.New("fill requires test_id and exactly one of value or secret_env")
+		if s.Path != "" || !s.validTarget() || (s.Value == nil) == (s.SecretEnv == nil) {
+			return errors.New("fill requires one valid target and exactly one of value or secret_env")
 		}
 		if s.Value != nil && len(*s.Value) > 4000 {
 			return errors.New("fill value is too long")
@@ -181,12 +225,12 @@ func validateStep(s Step) error {
 			return errors.New("secret_env must be a QA_TEST_ environment name")
 		}
 	case "click", "assert_visible":
-		if s.Path != "" || !validTestID(s.TestID) || s.Value != nil || s.SecretEnv != nil {
-			return errors.New("action requires only test_id")
+		if s.Path != "" || !s.validTarget() || s.Value != nil || s.SecretEnv != nil {
+			return errors.New("action requires only one valid target")
 		}
 	case "assert_text":
-		if s.Path != "" || !validTestID(s.TestID) || s.Value == nil || s.SecretEnv != nil || len(*s.Value) > 4000 {
-			return errors.New("assert_text requires test_id and exact value")
+		if s.Path != "" || !s.validTarget() || s.Value == nil || s.SecretEnv != nil || len(*s.Value) > 4000 {
+			return errors.New("assert_text requires one valid target and exact value")
 		}
 	default:
 		return errors.New("unsupported action")

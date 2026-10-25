@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { coverageGroups, runCounts } from './workspace.ts'
+import { coverageGroups, runCounts, requiresPlanRevision, scenarioInput } from './workspace.ts'
 import type { CoverageData, Run, Scenario } from './api.ts'
 const scenario = (id: string, journey_id = ''): Scenario => ({ id, journey_id, project_id: 'app', name: id, description: '', expected_outcome: 'Independent expected outcome', approved: true, steps: [], created_at: '' })
 test('coverage includes untested journeys, drafts without runs, and older ungrouped checks', () => {
@@ -35,4 +35,15 @@ test('comparison distinguishes fixed, new failures, still failing and missing pr
  const third={...after,id:'three',source_run_id:'two',created_at:'3'}
  assert.equal(groupRuns([third,after,before]).length,1)
  assert.equal(groupRuns([third,after,before])[0].length,3)
+})
+
+test('accessible assertions retain their target through validation and revision review', async () => {
+ const {validateScenario}=await import('./api.ts')
+ const original={...scenario('accessible'),expected_outcome:'Denied',steps:[{action:'assert_visible',locator:{role:'heading',name:'Denied'}}]} as Scenario
+ const changed={...original,expected_outcome:'Allowed',steps:[{action:'assert_visible',locator:{role:'heading',name:'Allowed'}}]} as Scenario
+ assert.equal(requiresPlanRevision(original, {...original,expected_outcome:'Allowed'}),true)
+ assert.equal(requiresPlanRevision(original, changed),false)
+ const validated = validateScenario({...scenarioInput(changed),steps:[{action:'fill',locator:{label:'Password'},secret_env:'QA_TEST_PASSWORD'},...changed.steps]})
+ assert.deepEqual(validated.steps[0].locator,{label:'Password'})
+ assert.throws(()=>validateScenario({...scenarioInput(changed),steps:[{action:'assert_visible',locator:{role:'heading',name:'Allowed'},test_id:'other'}]}))
 })

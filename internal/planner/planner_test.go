@@ -249,3 +249,19 @@ func TestCancellationTimeoutAndBusy(t *testing.T) {
 		t.Fatalf("cancellation: %v", err)
 	}
 }
+
+func TestAccessibleDraftPreservesExactTargetsAndRemainsUnapproved(t *testing.T) {
+	output := strings.Replace(validOutput, `"test_id":"revenue"`, `"test_id":null,"locator":{"role":"heading","name":"Net revenue","label":null}`, 1)
+	p, err := New("test-model", "managed-secret", roundTripFunc(func(*http.Request) (*http.Response, error) { return providerReply("completed", output), nil }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := p.Propose(context.Background(), validInput("managed"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	step := result.Scenarios[0].Steps[0]
+	if result.Scenarios[0].Approved || step.TestID != "" || step.Locator == nil || step.Locator.Role != "heading" || step.Locator.Name != "Net revenue" || *step.Value != "140000" {
+		t.Fatalf("draft altered: %+v", step)
+	}
+}

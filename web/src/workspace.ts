@@ -24,13 +24,14 @@ export function coverageGroups(data: CoverageData) {
 
 export const checkCount = (count: number) => `${count} ${count === 1 ? 'check' : 'checks'}`
 export function assertionKey(steps: Step[]) {
-  return JSON.stringify(steps.filter(step => step.action.startsWith('assert_')).map(step => [step.action, step.test_id, step.value ?? '']))
+  return JSON.stringify(steps.filter(step => step.action.startsWith('assert_')).map(step => [step.action, step.test_id, step.locator?.role, step.locator?.name, step.locator?.label, step.value ?? '']))
 }
 export function requiresPlanRevision(original: ScenarioInput, draft: ScenarioInput) {
   return original.expected_outcome !== draft.expected_outcome && assertionKey(original.steps) === assertionKey(draft.steps)
 }
+export const targetLabel = (step: Step) => step.locator?.label || (step.locator?.role ? `${step.locator.role} “${step.locator.name}”` : (step.test_id ?? 'control').replaceAll('-', ' ').replaceAll('_', ' '))
 export function stepLabel(step: Step): string {
-  const target = (step.test_id ?? 'control').replaceAll('-', ' ').replaceAll('_', ' ')
+  const target = targetLabel(step)
   switch (step.action) {
     case 'navigate': return `Open ${step.path}`
     case 'fill': return `Enter ${step.secret_env ? 'the saved test credential' : 'the configured value'} in ${target}`

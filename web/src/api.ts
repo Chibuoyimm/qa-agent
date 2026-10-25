@@ -1,9 +1,12 @@
 export type StepAction = 'navigate' | 'fill' | 'click' | 'assert_text' | 'assert_visible'
 
+export type ElementLocator = { role?: string; name?: string; label?: string }
+
 export type Step = {
   action: StepAction
   path?: string
   test_id?: string
+  locator?: ElementLocator
   value?: string
   secret_env?: string
 }
@@ -207,6 +210,7 @@ export type AiProposalResponse = {
 
 export type DiscoveryStatus = 'queued' | 'running' | 'completed' | 'error' | 'cancelled'
 export type DiscoveryElement = {
+  locator?: ElementLocator
   test_id: string
   tag: string
   role: string
@@ -256,6 +260,20 @@ export type RepositorySnapshot = RepositorySnapshotSummary & {
   files: { path: string; content: string }[]
 }
 
+export const locatorRoles = ['button', 'link', 'textbox', 'heading', 'checkbox', 'radio', 'combobox', 'option', 'tab', 'menuitem', 'alert', 'status', 'dialog', 'region', 'switch', 'spinbutton', 'searchbox']
+export function validateLocator(value: unknown): ElementLocator {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Choose a field label or role and exact name.')
+  const locator = value as Record<string, unknown>
+  const validName = (name: unknown): name is string => typeof name === 'string' && Boolean(name.trim()) && new TextEncoder().encode(name).length <= 300 && !/[\x00-\x08\x0a-\x1f]/.test(name)
+  if (Object.keys(locator).some(key => !['role', 'name', 'label'].includes(key))) throw new Error('Unsupported accessible target field.')
+  if (locator.label !== undefined) {
+    if (!validName(locator.label) || locator.role !== undefined || locator.name !== undefined) throw new Error('A field label must be used on its own.')
+    return { label: locator.label }
+  }
+  if (typeof locator.role !== 'string' || !locatorRoles.includes(locator.role) || !validName(locator.name)) throw new Error('Choose a supported role and exact accessible name.')
+  return { role: locator.role, name: locator.name }
+}
+
 export function validateScenario(input: unknown): ScenarioInput {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Each scenario must be a JSON object.')
   const data = input as Record<string, unknown>
@@ -272,26 +290,33 @@ export function validateScenario(input: unknown): ScenarioInput {
     const step = raw as Record<string, unknown>
     const action = step.action
     if (action !== 'navigate' && action !== 'fill' && action !== 'click' && action !== 'assert_text' && action !== 'assert_visible') throw new Error(`Step ${index + 1} has an unsupported action.`)
-    const fields = action === 'navigate' ? ['action', 'path'] : action === 'fill' ? ['action', 'test_id', 'value', 'secret_env'] : action === 'assert_text' ? ['action', 'test_id', 'value'] : ['action', 'test_id']
+    const fields = action === 'navigate' ? ['action', 'path'] : action === 'fill' ? ['action', 'test_id', 'locator', 'value', 'secret_env'] : action === 'assert_text' ? ['action', 'test_id', 'locator', 'value'] : ['action', 'test_id', 'locator']
     const extraField = Object.keys(step).find(key => !fields.includes(key))
     if (extraField) throw new Error(`Step ${index + 1}: remove “${extraField}” for ${action}.`)
     if (action === 'navigate') {
       if (typeof step.path !== 'string' || !step.path.startsWith('/') || step.path.startsWith('//')) throw new Error(`Step ${index + 1}: path must start with one “/”.`)
       return { action, path: step.path }
     }
-    if (typeof step.test_id !== 'string' || !step.test_id.trim()) throw new Error(`Step ${index + 1}: test_id is required.`)
+    let target: Pick<Step, 'test_id' | 'locator'>
+    if (step.locator !== undefined) {
+      if (step.test_id !== undefined) throw new Error(`Step ${index + 1}: choose one target.`)
+      target = { locator: validateLocator(step.locator) }
+    } else {
+      if (typeof step.test_id !== 'string' || !/^[\x21-\x7e]{1,200}$/.test(step.test_id) || /['"\\]/.test(step.test_id)) throw new Error(`Step ${index + 1}: a valid test ID or accessible target is required.`)
+      target = { test_id: step.test_id }
+    }
     if (action === 'fill') {
       const hasValue = typeof step.value === 'string'
       const hasSecret = typeof step.secret_env === 'string'
       if (hasValue === hasSecret) throw new Error(`Step ${index + 1}: fill needs exactly one of value or secret_env.`)
       if (hasSecret && !(step.secret_env as string).startsWith('QA_TEST_')) throw new Error(`Step ${index + 1}: secret_env must start with QA_TEST_.`)
-      return hasSecret ? { action, test_id: step.test_id, secret_env: step.secret_env as string } : { action, test_id: step.test_id, value: step.value as string }
+      return hasSecret ? { action, ...target, secret_env: step.secret_env as string } : { action, ...target, value: step.value as string }
     }
     if (action === 'assert_text') {
       if (typeof step.value !== 'string') throw new Error(`Step ${index + 1}: exact expected text is required.`)
-      return { action, test_id: step.test_id, value: step.value }
+      return { action, ...target, value: step.value }
     }
-    return { action, test_id: step.test_id }
+    return { action, ...target }
   })
   if (data.approved && !steps.some(step => step.action === 'assert_text' || step.action === 'assert_visible')) throw new Error('Approved scenarios need at least one assertion.')
   return {

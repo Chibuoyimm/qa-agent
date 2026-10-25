@@ -22,12 +22,13 @@ type DiscoveryInput struct {
 }
 
 type DiscoveryElement struct {
-	TestID    string `json:"test_id"`
-	Tag       string `json:"tag"`
-	Role      string `json:"role"`
-	Label     string `json:"label"`
-	Text      string `json:"text"`
-	InputType string `json:"input_type"`
+	Locator   *ElementLocator `json:"locator,omitempty"`
+	TestID    string          `json:"test_id"`
+	Tag       string          `json:"tag"`
+	Role      string          `json:"role"`
+	Label     string          `json:"label"`
+	Text      string          `json:"text"`
+	InputType string          `json:"input_type"`
 }
 
 type DiscoveryLink struct {
@@ -118,6 +119,9 @@ func ValidateDiscoveryResult(result DiscoveryResult, maxPages int) error {
 			}
 		}
 		for _, element := range page.Elements {
+			if element.Locator != nil && !element.Locator.Valid() {
+				return fmt.Errorf("%w: invalid discovery locator", ErrInvalid)
+			}
 			if !validObservationText(element.TestID, 200) || element.Tag == "" || !validObservationText(element.Tag, 100) ||
 				!validObservationText(element.Role, 100) || !validObservationText(element.Label, 200) ||
 				!validObservationText(element.Text, 300) || !validObservationText(element.InputType, 50) {

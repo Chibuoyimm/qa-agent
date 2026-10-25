@@ -2,7 +2,8 @@ import { mkdir, rename } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';
 import type { Browser, BrowserContext, Page } from 'playwright';
 import { openGuardedPage } from './browser-context.js';
-import { safePart, validateBaseUrl, type Artifact, type Run, type Scenario, type ScenarioResult, type ExecutionStepResult } from './contract.js';
+import { stepLocator } from './locator.js';
+import { safePart, validateBaseUrl, type Artifact, type Run, type Scenario, type ScenarioResult, type ExecutionStepResult, type Step } from './contract.js';
 
 const STEP_TIMEOUT_MS = 8000;
 const SCENARIO_TIMEOUT_MS = 60000;
@@ -16,8 +17,8 @@ function artifactPath(root: string, file: string): string {
   return path;
 }
 
-async function assertText(page: Page, testId: string, expected: string): Promise<void> {
-  const locator = page.getByTestId(testId);
+async function assertText(page: Page, step: Step, expected: string): Promise<void> {
+  const locator = stepLocator(page, step);
   try { await locator.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS }); }
   catch { throw new AssertionFailure('Expected element was not visible'); }
   const deadline = Date.now() + STEP_TIMEOUT_MS;
@@ -44,18 +45,18 @@ export async function executeSteps(page: Page, scenario: Scenario, base: URL, si
         case 'fill': {
           const value = step.secret_env ? process.env[step.secret_env] : step.value;
           if (step.secret_env && !value) throw new MissingSecret('Referenced test secret is unavailable');
-          await page.getByTestId(step.test_id!).fill(value ?? '', { timeout: STEP_TIMEOUT_MS });
+          await stepLocator(page, step).fill(value ?? '', { timeout: STEP_TIMEOUT_MS });
           break;
         }
         case 'click':
-          await page.getByTestId(step.test_id!).click({ timeout: STEP_TIMEOUT_MS });
+          await stepLocator(page, step).click({ timeout: STEP_TIMEOUT_MS });
           break;
         case 'assert_visible':
-          try { await page.getByTestId(step.test_id!).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS }); }
+          try { await stepLocator(page, step).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS }); }
           catch { throw new AssertionFailure('Expected element was not visible'); }
           break;
         case 'assert_text':
-          await assertText(page, step.test_id!, step.value!);
+          await assertText(page, step, step.value!);
           break;
       }
       results.push({ index, action: step.action, status: 'passed', duration_ms: Date.now() - started });

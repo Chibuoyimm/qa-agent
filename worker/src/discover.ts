@@ -1,14 +1,15 @@
 import type { Browser } from 'playwright';
 import { openGuardedPage } from './browser-context.js';
 import { executeSteps } from './execute.js';
-import { parseScenario, validateBaseUrl, type Scenario } from './contract.js';
+import { parseScenario, parseLocator, validateBaseUrl, type Scenario, type ElementLocator } from './contract.js';
+import { stepLocator } from './locator.js';
 
 export type DiscoveryInput = { base_url: string; start_path: string; max_pages: number; setup_scenario?: Scenario };
 export type PageObservation = {
   path: string;
   title: string;
   headings: string[];
-  elements: { test_id: string; tag: string; role: string; label: string; text: string; input_type: string }[];
+  elements: { test_id: string; tag: string; role: string; label: string; text: string; input_type: string; locator?: ElementLocator }[];
   links: { path: string; text: string }[];
   truncated: boolean;
 };
@@ -56,28 +57,50 @@ export async function discover(browser: Browser, input: DiscoveryInput, origins:
       if (actual.pathname !== path && visited.has(actual.pathname)) continue;
       visited.add(actual.pathname);
       const observation = await page.evaluate(() => {
-        const candidates = [...document.querySelectorAll('[data-testid],button,input,select,textarea,a,[role]')].filter(element => element.getClientRects().length > 0 && getComputedStyle(element).visibility !== 'hidden');
+        const candidates = [...document.querySelectorAll('[data-testid],button,input,select,textarea,a,[role],h1,h2,h3,h4,h5,h6')].filter(element => element.getClientRects().length > 0 && getComputedStyle(element).visibility !== 'hidden');
         const headings = [...document.querySelectorAll('h1,h2,h3')].filter(element => element.getClientRects().length > 0 && getComputedStyle(element).visibility !== 'hidden');
         const anchors = [...document.querySelectorAll<HTMLAnchorElement>('a[href]')].filter(element => element.getClientRects().length > 0 && getComputedStyle(element).visibility !== 'hidden');
         return {
           path: location.pathname,
           title: document.title.replace(/\s+/g, ' ').trim().slice(0, 200),
           headings: headings.slice(0, 20).map(element => ((element as HTMLElement).innerText ?? '').replace(/\s+/g, ' ').trim().slice(0, 300)),
-          elements: candidates.slice(0, 80).map(element => ({
+          elements: candidates.slice(0, 80).map(element => {
+            const label = (element.getAttribute('aria-label') ?? (element as HTMLInputElement).labels?.[0]?.textContent ?? '').replace(/\s+/g, ' ').trim();
+            const labelledBy = (element.getAttribute('aria-labelledby') ?? '').split(/\s+/).map(id => document.getElementById(id)?.textContent ?? '').join(' ').replace(/\s+/g, ' ').trim();
+            const type = element.getAttribute('type') ?? 'text';
+            const implicitRole = element.tagName === 'BUTTON' ? 'button' : element.tagName === 'A' && element.hasAttribute('href') ? 'link' : /^H[1-6]$/.test(element.tagName) ? 'heading' : element.tagName === 'TEXTAREA' ? 'textbox' : element.tagName === 'SELECT' ? 'combobox' : element.tagName === 'INPUT' ? ({ checkbox: 'checkbox', radio: 'radio', number: 'spinbutton', search: 'searchbox', text: 'textbox', email: 'textbox', tel: 'textbox', url: 'textbox', submit: 'button', button: 'button' }[type] ?? '') : '';
+            const role = element.getAttribute('role') ?? implicitRole;
+            const name = labelledBy || label || (['INPUT', 'TEXTAREA', 'SELECT'].includes(element.tagName) ? '' : (element as HTMLElement).innerText ?? '');
+            return {
             test_id: (element.getAttribute('data-testid') ?? '').slice(0, 200),
             tag: element.tagName.toLowerCase(),
-            role: (element.getAttribute('role') ?? '').slice(0, 100),
-            label: (element.getAttribute('aria-label') ?? (element as HTMLInputElement).labels?.[0]?.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 200),
+            role: role.slice(0, 100),
+            label: label.slice(0, 200),
+            locator: label ? { label } : { role, name: name.replace(/\s+/g, ' ').trim() },
             // Never collect input values, hidden fields, cookies or browser storage.
             text: ['INPUT', 'TEXTAREA', 'SELECT'].includes(element.tagName) ? '' : ((element as HTMLElement).innerText ?? '').replace(/\s+/g, ' ').trim().slice(0, 300),
             input_type: element.tagName === 'INPUT' ? (element.getAttribute('type') ?? 'text').slice(0, 50) : '',
-          })),
+          }; }),
           links: anchors.slice(0, 80).map(a => ({ path: a.href, text: a.innerText.replace(/\s+/g, ' ').trim().slice(0, 300) })),
           truncated: candidates.length > 80 || headings.length > 20 || anchors.length > 80 || document.title.length > 200 ||
             candidates.some(element => (element as HTMLElement).innerText?.length > 300 || (element.getAttribute('aria-label')?.length ?? 0) > 200 || (element.getAttribute('data-testid')?.length ?? 0) > 200) ||
             headings.some(element => (element as HTMLElement).innerText?.length > 300),
         };
       });
+      // DOM names are candidates only. Playwright confirms the accessible target
+      // resolves uniquely to the original observed element before it is shared.
+      for (const [index, element] of observation.elements.entries()) {
+        let verified: ElementLocator | undefined;
+        try {
+          const locator = parseLocator(element.locator);
+          const target = stepLocator(page, { locator });
+          if (await target.count() === 1 && await target.evaluate((node, position) => {
+            const nodes = [...document.querySelectorAll('[data-testid],button,input,select,textarea,a,[role],h1,h2,h3,h4,h5,h6')].filter(item => item.getClientRects().length > 0 && getComputedStyle(item).visibility !== 'hidden');
+            return nodes[position] === node;
+          }, index)) verified = locator;
+        } catch { /* Unnamed, unsupported or ambiguous controls need more context. */ }
+        Object.assign(element, { locator: verified });
+      }
       const links: PageObservation['links'] = [];
       for (const link of observation.links) {
         const url = new URL(link.path, base);
@@ -95,6 +118,7 @@ export async function discover(browser: Browser, input: DiscoveryInput, origins:
         title: redact(observation.title).slice(0, 200),
         headings: observation.headings.map(text => redact(text).slice(0, 300)),
         elements: observation.elements.map(element => ({
+          ...(element.locator && !secrets.some(secret => JSON.stringify(element.locator).includes(secret!)) ? { locator: element.locator as ElementLocator } : {}),
           test_id: redact(element.test_id).slice(0, 200), tag: redact(element.tag).slice(0, 100), role: redact(element.role).slice(0, 100),
           text: redact(element.text).slice(0, 300), label: redact(element.label).slice(0, 200), input_type: redact(element.input_type).slice(0, 50),
         })),

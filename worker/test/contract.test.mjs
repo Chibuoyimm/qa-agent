@@ -19,3 +19,14 @@ test('allowed origins must be exact HTTP(S) origins', () => {
   assert.throws(() => parseAllowedOrigins('http://127.0.0.1:4174/path'));
   assert.throws(() => parseAllowedOrigins('https://user:password@sample.test'));
 });
+
+test('accessible targets accept exact roles or labels and reject selectors or mixed targets', () => {
+  for (const locator of [{ label: 'Password' }, { role: 'button', name: 'Sign in' }]) {
+    const parsed = parseClaim(claim([{ action: 'assert_visible', locator }]));
+    assert.deepEqual(parsed.run.scenarios[0].steps[0].locator, locator);
+  }
+  for (const locator of [{}, { role: 'css', name: '#submit' }, { role: 'button', name: '' }, { label: 'Email', role: 'textbox', name: 'Email' }, { label: 'Email', selector: '#email' }]) {
+    assert.throws(() => parseClaim(claim([{ action: 'assert_visible', locator }])));
+  }
+  assert.throws(() => parseClaim(claim([{ action: 'assert_visible', test_id: 'ok', locator: { label: 'Email' } }])));
+});

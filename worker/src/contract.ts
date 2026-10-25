@@ -1,9 +1,13 @@
 import { createHash } from 'node:crypto';
 
+export const locatorRoles = ['button', 'link', 'textbox', 'heading', 'checkbox', 'radio', 'combobox', 'option', 'tab', 'menuitem', 'alert', 'status', 'dialog', 'region', 'switch', 'spinbutton', 'searchbox'] as const;
+export type ElementLocator = { role?: typeof locatorRoles[number]; name?: string; label?: string };
+
 export type Step = {
   action: 'navigate' | 'fill' | 'click' | 'assert_text' | 'assert_visible';
   path?: string;
   test_id?: string;
+  locator?: ElementLocator;
   value?: string;
   secret_env?: string;
 };
@@ -32,6 +36,18 @@ function onlyFields(value: Record<string, unknown>, fields: string[]): boolean {
   return Object.keys(value).every(key => fields.includes(key));
 }
 
+export function parseLocator(value: unknown): ElementLocator {
+  if (!record(value) || !onlyFields(value, ['role', 'name', 'label'])) throw new Error('Invalid accessible locator');
+  const validName = (name: unknown): name is string => typeof name === 'string' && name.trim().length > 0 && Buffer.byteLength(name) <= 300 && !/[\x00-\x08\x0a-\x1f]/.test(name);
+  // Structured model output represents unused fields as null.
+  if (value.label != null) {
+    if (!validName(value.label) || value.role != null || value.name != null) throw new Error('Invalid label locator');
+    return { label: value.label };
+  }
+  if (!locatorRoles.includes(value.role as typeof locatorRoles[number]) || !validName(value.name)) throw new Error('Invalid role locator');
+  return { role: value.role as typeof locatorRoles[number], name: value.name };
+}
+
 export function parseClaim(value: unknown): Claim {
   if (!record(value) || !record(value.run) || typeof value.lease_token !== 'string' || !value.lease_token) {
     throw new Error('Invalid claim payload');
@@ -58,19 +74,26 @@ export function parseScenario(candidate: unknown): Scenario {
       if (!onlyFields(step, ['action', 'path']) || typeof step.path !== 'string' || step.path.length > 2048 || !step.path.startsWith('/') || step.path.startsWith('//') || /[?#\\]/.test(step.path) || step.path.includes('..') || new URL(step.path, 'http://example.test').origin !== 'http://example.test') throw new Error('Invalid navigation path');
       return { action, path: step.path };
     }
-    if (typeof step.test_id !== 'string' || !/^[\x21-\x7e]{1,200}$/.test(step.test_id) || /['"\\]/.test(step.test_id)) throw new Error('Invalid test ID');
+    let target: Pick<Step, 'test_id' | 'locator'>;
+    if (step.locator != null) {
+      if (step.test_id != null && step.test_id !== '') throw new Error('Use exactly one target');
+      target = { locator: parseLocator(step.locator) };
+    } else {
+      if (typeof step.test_id !== 'string' || !/^[\x21-\x7e]{1,200}$/.test(step.test_id) || /['"\\]/.test(step.test_id)) throw new Error('Invalid test ID');
+      target = { test_id: step.test_id };
+    }
     if (action === 'fill') {
       const literal = typeof step.value === 'string';
       const secret = typeof step.secret_env === 'string' && step.secret_env.length <= 100 && /^QA_TEST_[A-Z0-9_]+$/.test(step.secret_env);
-      if (!onlyFields(step, ['action', 'test_id', 'value', 'secret_env']) || literal === secret || (literal && 'secret_env' in step) || (secret && 'value' in step) || (literal && (step.value as string).length > 4000)) throw new Error('Invalid fill value');
-      return { action, test_id: step.test_id, ...(literal ? { value: step.value as string } : { secret_env: step.secret_env as string }) };
+      if (!onlyFields(step, ['action', 'test_id', 'locator', 'value', 'secret_env']) || literal === secret || (literal && 'secret_env' in step) || (secret && 'value' in step) || (literal && (step.value as string).length > 4000)) throw new Error('Invalid fill value');
+      return { action, ...target, ...(literal ? { value: step.value as string } : { secret_env: step.secret_env as string }) };
     }
     if (action === 'assert_text') {
-      if (!onlyFields(step, ['action', 'test_id', 'value']) || typeof step.value !== 'string' || step.value.length > 4000) throw new Error('Invalid expected text');
-      return { action, test_id: step.test_id, value: step.value };
+      if (!onlyFields(step, ['action', 'test_id', 'locator', 'value']) || typeof step.value !== 'string' || step.value.length > 4000) throw new Error('Invalid expected text');
+      return { action, ...target, value: step.value };
     }
-    if (!onlyFields(step, ['action', 'test_id'])) throw new Error('Invalid action fields');
-    return { action, test_id: step.test_id };
+    if (!onlyFields(step, ['action', 'test_id', 'locator'])) throw new Error('Invalid action fields');
+    return { action, ...target };
   });
   if (!steps.some(step => step.action === 'assert_text' || step.action === 'assert_visible')) throw new Error('Scenario has no approved assertion');
   return { id: candidate.id, steps };

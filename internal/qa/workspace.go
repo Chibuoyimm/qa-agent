@@ -264,7 +264,10 @@ func (s *Store) DiscoverTask(ctx context.Context, projectID, id string, in TaskD
 	return discovery, nil
 }
 
-type assertionKey struct{ action, target, value string }
+type assertionKey struct {
+	action, target, value string
+	locator               ElementLocator
+}
 
 func assertionKeys(steps []Step) []assertionKey {
 	keys := []assertionKey{}
@@ -273,6 +276,9 @@ func assertionKeys(steps []Step) []assertionKey {
 			continue
 		}
 		key := assertionKey{action: step.Action, target: step.TestID}
+		if step.Locator != nil {
+			key.locator = *step.Locator
+		}
 		if step.Value != nil {
 			key.value = *step.Value
 		}

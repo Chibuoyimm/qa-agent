@@ -105,7 +105,7 @@ func (a *API) chatProposal(w http.ResponseWriter, r *http.Request) {
 	}
 	// An empty first request is useful: the model must ask for requirements, not invent tests.
 	if strings.TrimSpace(in.Context) == "" && len(in.RepositorySnapshotIDs) == 0 && in.DiscoveryID == "" {
-		in.Context = "No application context supplied. Ask for missing business expectations, paths and test IDs before proposing executable checks."
+		in.Context = "No application context supplied. Ask for missing business expectations, paths and accessible control names or test IDs before proposing executable checks."
 	}
 	key := r.Header.Get("X-QA-Provider-Key")
 	in.WorkspaceID = r.Header.Get("X-QA-Anthropic-Workspace")
@@ -202,7 +202,7 @@ func runContext(appContext string, run qa.Run) (string, error) {
 					}
 					definition := scenario.Steps[step.Index]
 					if definition.Action == "assert_text" || definition.Action == "assert_visible" {
-						entry.Assertions = append(entry.Assertions, comparison{definition.TestID, definition.Value, step.Observed, step.Status})
+						entry.Assertions = append(entry.Assertions, comparison{definition.TargetName(), definition.Value, step.Observed, step.Status})
 					}
 				}
 				break

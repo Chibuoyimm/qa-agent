@@ -5,7 +5,7 @@ The main navigation is **Test, Coverage, Results, Settings**. Conversations, app
 ## Test a journey
 
 1. In Settings → App & access, follow the readiness checklist: register the app URL, choose public access or an approved sign-in check, verify browser access, and connect AI. A completed verification can be saved as the app’s default; its date remains visible and new requests reuse its access check. For private apps, an engineer can add an approved access check using worker-local `QA_TEST_` secret references.
-2. In Test, describe the business behavior and choose or name its journey. Optional bounded exploration finds paths and test IDs; selected repository snapshots provide additional source context. Observations are evidence of current behavior, not the business expectation.
+2. In Test, describe the business behavior and choose or name its journey. Optional bounded exploration finds paths and named controls; selected repository snapshots provide additional source context. Observations are evidence of current behavior, not the business expectation.
 3. Answer any missing business questions. Known access paths, controls and worker-local secret references follow the discovery automatically. Literal access fill values are excluded from model context.
 4. Review the proposed outcomes and the exact assertions shown beneath them. Editing prose alone blocks approval until the plan is revised. Use “Revise plan in chat” for a new requirement, or edit an exact checked value directly; this updates its executable assertion and expectation summary. Revised checks require a fresh review before approval, including after reload. Deselect checks as needed, then approve and run the selected plan. Batch approval is atomic and idempotent, so a network retry reuses the saved checks.
 5. Follow the run in the conversation or open its full report. Blocked checks, execution errors and unfinished checks remain separate from assertion failures.
@@ -40,3 +40,11 @@ Journeys are explicit records. Add important journeys before tests exist to keep
 Task and recheck creation use a 32-character hexadecimal `request_id` for retry identity. A changed payload with a reused identity conflicts. Task approval requires a proposal turn from that same task. Legacy API endpoints remain supported. Migration 007 adds the task/journey associations without replacing existing projects, checks, chat, or run snapshots.
 
 The API also rejects a task approval that changes the proposed expected outcome while retaining the same assertions. This catches prose-only edits; it is not a semantic proof that arbitrary prose matches edited code. Review the displayed executable assertions before approval.
+
+## Browser targets
+
+Checks can target an existing `test_id`, an exact field label (`locator: {"label":"Password"}`), or an exact role and accessible name (`locator: {"role":"button","name":"Sign in"}`). Each step accepts one target. Arbitrary CSS, XPath, scripts, and positional fallbacks are unsupported. Existing approved snapshots using test IDs remain valid.
+
+Discovery includes visible headings and publishes an accessible locator only after Playwright confirms that it uniquely resolves to the observed control. Unnamed or duplicate controls may still appear as observations without an executable locator. The planner must ask for missing context rather than invent a target. Execution uses exact matches and rejects ambiguous actions; it never selects the first matching control. Editing a locator changes the assertion definition and remains subject to plan review.
+
+This first pilot supports navigation, fill, click, visible assertions, and exact text assertions. Native select changes, multiple browser actors in one scenario, and email-inbox actions need additional capabilities or explicit setup. Discovery is bounded to five pages and does not certify an entire app.

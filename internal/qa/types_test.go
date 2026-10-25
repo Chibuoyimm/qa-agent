@@ -62,3 +62,29 @@ func TestExecutionStepRecordsCannotClaimUnreachedSteps(t *testing.T) {
 		t.Fatal("legacy worker compatibility", err)
 	}
 }
+
+func TestAccessibleTargets(t *testing.T) {
+	value := "demo@example.test"
+	for _, target := range []ElementLocator{{Label: "Email address"}, {Role: "button", Name: "Sign in"}, {Role: "heading", Name: "Créez votre compte"}} {
+		_, err := ValidateScenario(ScenarioInput{Name: "check", ExpectedOutcome: "visible", Approved: true, Steps: []Step{{Action: "fill", Locator: &target, Value: &value}, {Action: "assert_visible", Locator: &target}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, step := range []Step{
+		{Action: "click", Locator: &ElementLocator{}},
+		{Action: "click", TestID: "button", Locator: &ElementLocator{Role: "button", Name: "Sign in"}},
+		{Action: "click", Locator: &ElementLocator{Label: "Email", Role: "textbox", Name: "Email"}},
+		{Action: "click", Locator: &ElementLocator{Role: "css", Name: "#submit"}},
+		{Action: "navigate", Path: "/", Locator: &ElementLocator{Label: "Email"}},
+	} {
+		if err := validateStep(step); err == nil {
+			t.Fatalf("accepted invalid target: %+v", step)
+		}
+	}
+	original := []Step{{Action: "assert_visible", Locator: &ElementLocator{Role: "heading", Name: "Denied"}}}
+	changed := []Step{{Action: "assert_visible", Locator: &ElementLocator{Role: "heading", Name: "Allowed"}}}
+	if assertionKeys(original)[0] == assertionKeys(changed)[0] {
+		t.Fatal("assertion identity ignored accessible target")
+	}
+}
