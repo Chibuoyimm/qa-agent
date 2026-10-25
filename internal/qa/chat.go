@@ -81,7 +81,7 @@ func (s *Store) ListTaskChat(ctx context.Context, projectID, taskID string, befo
 	if _, err := s.GetProject(ctx, projectID); err != nil {
 		return ChatPage{}, err
 	}
-	if _, err := s.db.Exec(ctx, `UPDATE chat_turns SET status='error',reply=$2 WHERE project_id=$1 AND status='pending' AND created_at < clock_timestamp()-interval '100 seconds'`, projectID, interruptedChatReply); err != nil {
+	if _, err := s.db.Exec(ctx, `UPDATE chat_turns SET status='error',reply=$2 WHERE project_id=$1 AND status='pending' AND created_at < clock_timestamp()-interval '390 seconds'`, projectID, interruptedChatReply); err != nil {
 		return ChatPage{}, err
 	}
 	rows, err := s.db.Query(ctx, `SELECT `+chatColumns+` FROM chat_turns WHERE project_id=$1 AND ($2::bigint=0 OR sequence<$2) AND ($3='' OR task_id=$3) ORDER BY sequence DESC LIMIT 21`, projectID, before, taskID)
@@ -147,7 +147,7 @@ func (s *Store) BeginTaskChat(ctx context.Context, projectID, taskID, id, prompt
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return ChatTurn{}, false, err
 	}
-	if _, err := tx.Exec(ctx, `UPDATE chat_turns SET status='error',reply=$2 WHERE project_id=$1 AND status='pending' AND created_at < clock_timestamp()-interval '100 seconds'`, projectID, interruptedChatReply); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE chat_turns SET status='error',reply=$2 WHERE project_id=$1 AND status='pending' AND created_at < clock_timestamp()-interval '390 seconds'`, projectID, interruptedChatReply); err != nil {
 		return ChatTurn{}, false, err
 	}
 	var busy bool

@@ -197,6 +197,9 @@ func (s *Store) CreateDiscovery(ctx context.Context, projectID string, in Discov
 		if err := json.Unmarshal(steps, &scenario.Steps); err != nil {
 			return Discovery{}, err
 		}
+		if err := ValidateAccessSteps(scenario.Steps); err != nil {
+			return Discovery{}, err
+		}
 		setup, err = json.Marshal(scenario)
 		if err != nil {
 			return Discovery{}, err

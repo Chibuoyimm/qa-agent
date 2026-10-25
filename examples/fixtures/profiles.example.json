@@ -1,0 +1,13 @@
+[
+  {
+    "id": "escrow_local",
+    "name": "Local escrow customers",
+    "description": "Two fresh synthetic customers; removes only this run’s records afterward.",
+    "origins": ["http://127.0.0.1:3000"],
+    "secret_refs": ["QA_TEST_REQUESTER_EMAIL", "QA_TEST_REQUESTER_PASSWORD", "QA_TEST_REQUESTER_ID", "QA_TEST_COUNTERPARTY_EMAIL", "QA_TEST_COUNTERPARTY_PASSWORD", "QA_TEST_COUNTERPARTY_ID"],
+    "prepare": ["/absolute/path/to/escrow/.venv/bin/python", "/absolute/path/to/qa-agent/examples/fixtures/escrow.py", "prepare"],
+    "cleanup": ["/absolute/path/to/escrow/.venv/bin/python", "/absolute/path/to/qa-agent/examples/fixtures/escrow.py", "cleanup"],
+    "environment": ["QA_FIXTURE_ESCROW_DATABASE_URL", "QA_FIXTURE_ESCROW_REPO"],
+    "timeout_ms": 30000
+  }
+]

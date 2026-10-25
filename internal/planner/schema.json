@@ -16,15 +16,18 @@
           "expected_outcome": {"type": "string"},
           "steps": {
             "type": "array",
-            "description": "Between 1 and 50 steps, including at least one assertion.",
+            "description": "Up to 50 steps for checks, or up to 200 ordered steps for a complete journey. Include assertions.",
             "minItems": 1,
             "items": {
               "type": "object",
               "additionalProperties": false,
-              "required": ["action", "path", "test_id", "value", "secret_env", "locator"],
+              "required": ["action", "path", "test_id", "value", "secret_env", "locator", "save_as", "json_pointer", "value_ref"],
               "properties": {
-                "action": {"type": "string", "enum": ["navigate", "fill", "click", "assert_text", "assert_visible"]},
+                "action": {"type": "string", "enum": ["navigate", "fill", "click", "assert_text", "assert_visible", "assert_absent", "assert_path", "select_option", "phase", "use_actor", "prepare_fixture", "cleanup_fixture", "capture_id", "capture_json", "assert_json", "assert_json_number"]},
                 "path": {"type": ["string", "null"]},
+                "save_as": {"type": ["string", "null"]},
+                "json_pointer": {"type": ["string", "null"]},
+                "value_ref": {"type": ["string", "null"]},
                 "test_id": {"type": ["string", "null"]},
                 "value": {"type": ["string", "null"]},
                 "secret_env": {"type": ["string", "null"]},

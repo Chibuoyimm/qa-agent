@@ -15,7 +15,7 @@ type geminiProvider struct{ planner *Planner }
 func (a openAIProvider) draft(ctx context.Context, in Input, key, workspace string, spec draftSpec) (string, error) {
 	request := providerRequest{Model: in.Model, Instructions: spec.instructions,
 		Input: "Testing request:\n" + in.Prompt + "\n\nApplication context:\n" + in.Context,
-		Store: false, MaxOutputTokens: 6000}
+		Store: false, MaxOutputTokens: outputLimit(in)}
 	request.Text.Format.Type = "json_schema"
 	request.Text.Format.Name = spec.name
 	request.Text.Format.Strict = true
@@ -66,7 +66,7 @@ type anthropicResponse struct {
 }
 
 func (a anthropicProvider) draft(ctx context.Context, in Input, key, workspace string, spec draftSpec) (string, error) {
-	request := anthropicRequest{Model: in.Model, MaxTokens: 6000, System: spec.instructions,
+	request := anthropicRequest{Model: in.Model, MaxTokens: outputLimit(in), System: spec.instructions,
 		Messages: []anthropicMessage{{Role: "user", Content: "Testing request:\n" + in.Prompt + "\n\nApplication context:\n" + in.Context}}}
 	request.OutputConfig.Format = jsonFormat{Type: "json_schema", Schema: spec.schema}
 	body, err := json.Marshal(request)
@@ -147,7 +147,7 @@ func (a geminiProvider) draft(ctx context.Context, in Input, key, workspace stri
 		Contents:          []geminiContent{{Role: "user", Parts: []geminiText{{Text: "Testing request:\n" + in.Prompt + "\n\nApplication context:\n" + in.Context}}}},
 	}
 	request.GenerationConfig.CandidateCount = 1
-	request.GenerationConfig.MaxOutputTokens = 6000
+	request.GenerationConfig.MaxOutputTokens = outputLimit(in)
 	request.GenerationConfig.ResponseFormat.Text.MIMEType = "application/json"
 	request.GenerationConfig.ResponseFormat.Text.Schema = spec.schema
 	body, err := json.Marshal(request)
@@ -221,4 +221,11 @@ func (p *Planner) postJSON(ctx context.Context, url string, body []byte, headers
 		return nil, ErrUpstream
 	}
 	return data, nil
+}
+
+func outputLimit(in Input) int {
+	if in.Journey {
+		return 16000
+	}
+	return 6000
 }

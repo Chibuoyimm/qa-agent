@@ -88,3 +88,54 @@ func TestAccessibleTargets(t *testing.T) {
 		t.Fatal("assertion identity ignored accessible target")
 	}
 }
+
+func TestJourneyBindingsAndCleanup(t *testing.T) {
+	str := func(v string) *string { return &v }
+	base := ScenarioInput{Name: "Trade journey", ExpectedOutcome: "A locked trade has the stated amount", Approved: true, Steps: []Step{
+		{Action: "prepare_fixture", Value: str("escrow_local")}, {Action: "phase", Value: str("Create request")}, {Action: "use_actor", Value: str("requester")},
+		{Action: "navigate", Path: "/new"}, {Action: "capture_id", Path: "/requests/", SaveAs: "request_id"},
+		{Action: "assert_json_number", Path: "/api/requests/{{request_id}}", JSONPointer: "/amount", Value: str("1000")},
+		{Action: "cleanup_fixture", Value: str("escrow_local")},
+	}}
+	if _, err := ValidateScenario(base); err != nil {
+		t.Fatal(err)
+	}
+	cases := [][]Step{
+		base.Steps[:len(base.Steps)-1],
+		{{Action: "navigate", Path: "/requests/{{missing}}"}, {Action: "assert_visible", TestID: "ok"}},
+		{{Action: "capture_json", Path: "/api/me", JSONPointer: "/access_token", SaveAs: "id"}, {Action: "assert_path", Path: "/"}},
+		{{Action: "capture_id", Path: "/requests/", SaveAs: "run_id"}, {Action: "assert_path", Path: "/"}},
+		{{Action: "capture_json", Path: "/api/me", JSONPointer: "/id", SaveAs: "amount"}, {Action: "assert_json_number", Path: "/api/data", JSONPointer: "/amount", ValueRef: "amount"}},
+		{{Action: "assert_path", Path: "//evil.test"}},
+	}
+	for i, steps := range cases {
+		candidate := base
+		candidate.Steps = steps
+		if _, err := ValidateScenario(candidate); err == nil {
+			t.Fatalf("invalid journey %d accepted", i)
+		}
+	}
+	scenario := Scenario{ID: "flow", ScenarioInput: base}
+	result := ScenarioResult{ScenarioID: "flow", Status: "passed"}
+	if _, err := ValidateResults([]Scenario{scenario}, []ScenarioResult{result}); err == nil {
+		t.Fatal("accepted a journey pass without step evidence")
+	}
+	for i, step := range base.Steps {
+		status := "passed"
+		if i == 3 {
+			status = "failed"
+		}
+		if i > 3 && i < len(base.Steps)-1 {
+			status = "not_run"
+		}
+		result.StepResults = append(result.StepResults, ExecutionStepResult{Index: i, Action: step.Action, Status: status})
+	}
+	result.Status = "failed"
+	if _, err := ValidateResults([]Scenario{scenario}, []ScenarioResult{result}); err != nil {
+		t.Fatal("approved cleanup should execute after failure", err)
+	}
+	result.StepResults[4].Status = "passed"
+	if _, err := ValidateResults([]Scenario{scenario}, []ScenarioResult{result}); err == nil {
+		t.Fatal("accepted dependent activity after a failure")
+	}
+}

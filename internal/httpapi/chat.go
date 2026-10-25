@@ -177,10 +177,11 @@ func (a *API) chatProposal(w http.ResponseWriter, r *http.Request) {
 // Share bounded recorded outcomes, not credentials, media paths, or fill values.
 func runContext(appContext string, run qa.Run) (string, error) {
 	type comparison struct {
-		Control  string  `json:"control"`
-		Expected *string `json:"expected_text,omitempty"`
-		Observed string  `json:"observed_text,omitempty"`
-		Status   string  `json:"status"`
+		Control           string  `json:"control"`
+		ExpectedReference string  `json:"expected_reference,omitempty"`
+		Expected          *string `json:"expected_text,omitempty"`
+		Observed          string  `json:"observed_text,omitempty"`
+		Status            string  `json:"status"`
 	}
 	type check struct {
 		Name       string       `json:"name"`
@@ -201,8 +202,8 @@ func runContext(appContext string, run qa.Run) (string, error) {
 						continue
 					}
 					definition := scenario.Steps[step.Index]
-					if definition.Action == "assert_text" || definition.Action == "assert_visible" {
-						entry.Assertions = append(entry.Assertions, comparison{definition.TargetName(), definition.Value, step.Observed, step.Status})
+					if strings.HasPrefix(definition.Action, "assert_") {
+						entry.Assertions = append(entry.Assertions, comparison{Control: definition.TargetName(), Expected: definition.Value, ExpectedReference: definition.ValueRef, Observed: step.Observed, Status: step.Status})
 					}
 				}
 				break
@@ -246,7 +247,14 @@ func chatContext(appContext string, turns []qa.ChatTurn) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if used+len(raw) > 12000 {
+		budget := 12000
+		for _, scenario := range entry.Scenarios {
+			if qa.IsJourney(scenario.Steps) {
+				budget = 48000
+				break
+			}
+		}
+		if used+len(raw) > budget {
 			break
 		}
 		used += len(raw)

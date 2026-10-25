@@ -236,3 +236,15 @@ func (a *API) saveVerifiedAccess(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, value)
 }
+
+func (a *API) runProgress(w http.ResponseWriter, r *http.Request) {
+	var in qa.CompleteInput
+	if !decodeJSON(w, r, &in) {
+		return
+	}
+	if err := a.store.RecordProgress(r.Context(), r.PathValue("id"), in); err != nil {
+		a.fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}

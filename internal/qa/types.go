@@ -28,12 +28,15 @@ type ProjectInput struct {
 }
 
 type Step struct {
-	Action    string          `json:"action"`
-	Path      string          `json:"path,omitempty"`
-	TestID    string          `json:"test_id,omitempty"`
-	Locator   *ElementLocator `json:"locator,omitempty"`
-	Value     *string         `json:"value,omitempty"`
-	SecretEnv *string         `json:"secret_env,omitempty"`
+	Action      string          `json:"action"`
+	SaveAs      string          `json:"save_as,omitempty"`
+	JSONPointer string          `json:"json_pointer,omitempty"`
+	ValueRef    string          `json:"value_ref,omitempty"`
+	Path        string          `json:"path,omitempty"`
+	TestID      string          `json:"test_id,omitempty"`
+	Locator     *ElementLocator `json:"locator,omitempty"`
+	Value       *string         `json:"value,omitempty"`
+	SecretEnv   *string         `json:"secret_env,omitempty"`
 }
 
 // ElementLocator uses exact accessible names; it never accepts CSS or script.
@@ -76,6 +79,12 @@ func (s Step) TargetName() string {
 		}
 		return s.Locator.Role + " “" + s.Locator.Name + "”"
 	}
+	if s.Path != "" {
+		if s.JSONPointer != "" {
+			return s.Path + " #" + s.JSONPointer
+		}
+		return s.Path
+	}
 	return s.TestID
 }
 
@@ -97,8 +106,9 @@ type Scenario struct {
 }
 
 type Artifact struct {
-	Kind string `json:"kind"`
-	Path string `json:"path"`
+	Actor string `json:"actor,omitempty"`
+	Kind  string `json:"kind"`
+	Path  string `json:"path"`
 }
 
 type ExecutionStepResult struct {
@@ -190,17 +200,20 @@ func ValidateScenario(in ScenarioInput) (ScenarioInput, error) {
 	if in.Name == "" || len(in.Name) > 200 || len(in.Description) > 4000 || in.ExpectedOutcome == "" || len(in.ExpectedOutcome) > 4000 {
 		return in, fmt.Errorf("%w: scenario requires a name (1–200), description (up to 4000), and expected_outcome (1–4000)", ErrInvalid)
 	}
-	if len(in.Steps) < 1 || len(in.Steps) > 50 {
-		return in, fmt.Errorf("%w: scenario must have 1–50 steps", ErrInvalid)
+	if len(in.Steps) < 1 || len(in.Steps) > 200 || (len(in.Steps) > 50 && !IsJourney(in.Steps)) {
+		return in, fmt.Errorf("%w: scenario must have 1–50 steps, or up to 200 for a complete journey", ErrInvalid)
 	}
 	assertion := false
 	for i, step := range in.Steps {
 		if err := validateStep(step); err != nil {
 			return in, fmt.Errorf("%w: step %d: %v", ErrInvalid, i+1, err)
 		}
-		if step.Action == "assert_text" || step.Action == "assert_visible" {
+		if strings.HasPrefix(step.Action, "assert_") {
 			assertion = true
 		}
+	}
+	if err := validateBindings(in.Steps); err != nil {
+		return in, fmt.Errorf("%w: %v", ErrInvalid, err)
 	}
 	if in.Approved && !assertion {
 		return in, fmt.Errorf("%w: approved scenario requires an assertion", ErrInvalid)
@@ -209,6 +222,13 @@ func ValidateScenario(in ScenarioInput) (ScenarioInput, error) {
 }
 
 func validateStep(s Step) error {
+	switch s.Action {
+	case "phase", "use_actor", "prepare_fixture", "cleanup_fixture", "capture_id", "capture_json", "assert_json", "assert_json_number", "assert_path":
+		return validateJourneyStep(s)
+	}
+	if s.SaveAs != "" || s.JSONPointer != "" || s.ValueRef != "" {
+		return errors.New("unexpected binding or JSON field")
+	}
 	switch s.Action {
 	case "navigate":
 		if len(s.Path) > 2048 || !strings.HasPrefix(s.Path, "/") || strings.HasPrefix(s.Path, "//") || strings.ContainsAny(s.Path, "?#\\") || strings.Contains(s.Path, "..") || s.TestID != "" || s.Locator != nil || s.Value != nil || s.SecretEnv != nil {
@@ -224,11 +244,11 @@ func validateStep(s Step) error {
 		if s.SecretEnv != nil && !validSecretEnv(*s.SecretEnv) {
 			return errors.New("secret_env must be a QA_TEST_ environment name")
 		}
-	case "click", "assert_visible":
+	case "click", "assert_visible", "assert_absent":
 		if s.Path != "" || !s.validTarget() || s.Value != nil || s.SecretEnv != nil {
 			return errors.New("action requires only one valid target")
 		}
-	case "assert_text":
+	case "assert_text", "select_option":
 		if s.Path != "" || !s.validTarget() || s.Value == nil || s.SecretEnv != nil || len(*s.Value) > 4000 {
 			return errors.New("assert_text requires one valid target and exact value")
 		}
@@ -263,7 +283,10 @@ func validSecretEnv(s string) bool {
 }
 
 func ValidateResults(scenarios []Scenario, results []ScenarioResult) (string, error) {
-	if len(results) != len(scenarios) {
+	return validateResults(scenarios, results, false)
+}
+func validateResults(scenarios []Scenario, results []ScenarioResult, progress bool) (string, error) {
+	if (!progress && len(results) != len(scenarios)) || len(results) > len(scenarios) {
 		return "", fmt.Errorf("%w: expected exactly one result per scenario", ErrInvalid)
 	}
 	known := make(map[string]Scenario, len(scenarios))
@@ -281,20 +304,44 @@ func ValidateResults(scenarios []Scenario, results []ScenarioResult) (string, er
 		if len(result.StepResults) > len(scenario.Steps) || (len(result.StepResults) > 0 && result.Status == "passed" && len(result.StepResults) != len(scenario.Steps)) {
 			return "", fmt.Errorf("%w: step records do not match the scenario length", ErrInvalid)
 		}
+		if IsJourney(scenario.Steps) && ((result.Status == "passed" && len(result.StepResults) != len(scenario.Steps)) || (!progress && len(result.StepResults) > 0 && len(result.StepResults) != len(scenario.Steps))) {
+			return "", fmt.Errorf("%w: journey completion must account for cleanup and every dependent step", ErrInvalid)
+		}
+		stopped := false
 		for i, step := range result.StepResults {
-			if step.Index != i || step.Action != scenario.Steps[i].Action || step.DurationMS < 0 || step.DurationMS > 3600000 || len(step.Message) > 1000 || len(step.Observed) > 4000 || (step.Status != "passed" && step.Status != "failed" && step.Status != "blocked" && step.Status != "error") || (result.Status == "passed" && step.Status != "passed") || (i < len(result.StepResults)-1 && step.Status != "passed") || (step.Observed != "" && (step.Action != "assert_text" || step.Status != "failed")) {
+			if step.Index != i || step.Action != scenario.Steps[i].Action || step.DurationMS < 0 || step.DurationMS > 3600000 || len(step.Message) > 1000 || len(step.Observed) > 4000 || (step.Status != "passed" && step.Status != "failed" && step.Status != "blocked" && step.Status != "error" && step.Status != "not_run") {
 				return "", fmt.Errorf("%w: invalid execution step result", ErrInvalid)
+			}
+			if result.Status == "passed" && step.Status != "passed" {
+				return "", fmt.Errorf("%w: a passing result contains an unfinished or failed step", ErrInvalid)
+			}
+			cleanup := i == len(scenario.Steps)-1 && step.Action == "cleanup_fixture"
+			if stopped && step.Status != "not_run" && !cleanup {
+				return "", fmt.Errorf("%w: dependent steps ran after a required failure", ErrInvalid)
+			}
+			if step.Status == "not_run" && !stopped {
+				return "", fmt.Errorf("%w: an unreached step requires an earlier failure", ErrInvalid)
+			}
+			if step.Observed != "" && (step.Action != "assert_text" || step.Status != "failed") {
+				return "", fmt.Errorf("%w: observation is only supported for a failed text assertion", ErrInvalid)
+			}
+			if step.Status != "passed" {
+				stopped = true
 			}
 		}
 		if len(result.Message) > 4000 || result.DurationMS < 0 || result.DurationMS > 3_600_000 || len(result.Artifacts) > 20 {
 			return "", fmt.Errorf("%w: result message, duration, or artifacts exceed limits", ErrInvalid)
 		}
 		for _, artifact := range result.Artifacts {
-			if (artifact.Kind != "screenshot" && artifact.Kind != "video") || !validArtifactPath(artifact.Path) {
+			if (artifact.Kind != "screenshot" && artifact.Kind != "video") || !validArtifactPath(artifact.Path) || (artifact.Actor != "" && !bindingName.MatchString(artifact.Actor)) {
 				return "", fmt.Errorf("%w: invalid artifact", ErrInvalid)
 			}
 		}
 		switch result.Status {
+		case "running":
+			if !progress {
+				return "", fmt.Errorf("%w: incomplete result", ErrInvalid)
+			}
 		case "passed":
 		case "failed":
 			if status == "passed" {

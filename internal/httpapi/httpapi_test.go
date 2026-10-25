@@ -586,5 +586,6 @@ func TestHTTPBoundary(t *testing.T) {
 	t.Run("Repository file search", func(t *testing.T) { verifyRepositorySearchHTTP(t, store) })
 	t.Run("Azure repository", func(t *testing.T) { verifyAzureHTTP(t, store) })
 	t.Run("chat conversation", func(t *testing.T) { verifyChatHTTP(t, store) })
+	t.Run("complete journey planning", func(t *testing.T) { verifyJourneyHTTP(t, store) })
 
 }

@@ -233,7 +233,7 @@ func createRunTx(ctx context.Context, tx pgx.Tx, id, projectID, baseURL string, 
 
 func (s *Store) expireLeases(ctx context.Context) error {
 	_, err := s.db.Exec(ctx, `UPDATE runs SET status='error', gate=CASE WHEN mode='blocking' THEN 'fail' ELSE 'warn' END,
-		finished_at=now(), lease_token=NULL, lease_expires_at=NULL
+		finished_at=now()
 		WHERE status='running' AND lease_expires_at <= clock_timestamp()`)
 	return err
 }
@@ -302,7 +302,7 @@ func (s *Store) CancelRun(ctx context.Context, id string) (Run, error) {
 		return Run{}, err
 	}
 	row := s.db.QueryRow(ctx, `UPDATE runs SET status='cancelled',gate=CASE WHEN mode='blocking' THEN 'fail' ELSE 'warn' END,
-		finished_at=now(),lease_token=NULL,lease_expires_at=NULL
+		finished_at=now()
 		WHERE id=$1 AND status IN ('queued','running') RETURNING `+runColumns, id)
 	run, err := scanRun(row)
 	if errors.Is(err, pgx.ErrNoRows) {

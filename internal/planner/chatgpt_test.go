@@ -43,7 +43,8 @@ func TestSubscriptionStreamBoundaries(t *testing.T) {
 		{"mismatched event", strings.Replace(completed, "event: response.completed", "event: response.failed", 1), ErrUpstream},
 		{"wrong terminal status", strings.Replace(completed, "\"status\":\"completed\"", "\"status\":\"incomplete\"", 1), ErrUpstream},
 		{"oversized event", "data: " + strings.Repeat("x", 2<<20) + "\n\n" + completed, ErrUpstream},
-		{"oversized stream", strings.Repeat(": heartbeat\n\n", 180000) + completed, ErrUpstream},
+		{"long journey stream", strings.Repeat(": heartbeat\n\n", 180000) + completed, nil},
+		{"oversized stream", strings.Repeat(": heartbeat\n\n", 700000) + completed, ErrUpstream},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			result, err := readSubscriptionStream(strings.NewReader(tc.body))

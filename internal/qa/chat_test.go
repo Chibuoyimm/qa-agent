@@ -116,7 +116,7 @@ func TestChatPendingRecoveryAndHistoryPaging(t *testing.T) {
 	if _, _, err := store.BeginChat(ctx, project.ID, "22222222222222222222222222222222", "Another request", "another"); !errors.Is(err, qa.ErrConflict) {
 		t.Fatalf("parallel drafting not rejected: %v", err)
 	}
-	if _, err := db.Exec(ctx, `UPDATE chat_turns SET created_at=clock_timestamp()-interval '101 seconds' WHERE id=$1`, turn.ID); err != nil {
+	if _, err := db.Exec(ctx, `UPDATE chat_turns SET created_at=clock_timestamp()-interval '391 seconds' WHERE id=$1`, turn.ID); err != nil {
 		t.Fatal(err)
 	}
 	page, err := store.ListChat(ctx, project.ID, 0)

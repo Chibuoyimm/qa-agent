@@ -242,6 +242,9 @@ func (s *Store) DiscoverTask(ctx context.Context, projectID, id string, in TaskD
 		if err := json.Unmarshal(raw, &scenario.Steps); err != nil {
 			return Discovery{}, err
 		}
+		if err := ValidateAccessSteps(scenario.Steps); err != nil {
+			return Discovery{}, err
+		}
 		setup, err = json.Marshal(scenario)
 		if err != nil {
 			return Discovery{}, err
@@ -265,17 +268,21 @@ func (s *Store) DiscoverTask(ctx context.Context, projectID, id string, in TaskD
 }
 
 type assertionKey struct {
-	action, target, value string
-	locator               ElementLocator
+	action, target, value, path, pointer, reference, actor string
+	locator                                                ElementLocator
 }
 
 func assertionKeys(steps []Step) []assertionKey {
 	keys := []assertionKey{}
+	actor := ""
 	for _, step := range steps {
-		if step.Action != "assert_text" && step.Action != "assert_visible" {
+		if step.Action == "use_actor" && step.Value != nil {
+			actor = *step.Value
+		}
+		if !strings.HasPrefix(step.Action, "assert_") {
 			continue
 		}
-		key := assertionKey{action: step.Action, target: step.TestID}
+		key := assertionKey{action: step.Action, target: step.TestID, path: step.Path, pointer: step.JSONPointer, reference: step.ValueRef, actor: actor}
 		if step.Locator != nil {
 			key.locator = *step.Locator
 		}

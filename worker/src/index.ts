@@ -2,12 +2,14 @@ import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import { chromium, type Browser } from 'playwright';
 import { parseAllowedOrigins, parseClaim, safePart, validateBaseUrl, type Claim, type ScenarioResult } from './contract.js';
+import { loadFixtures } from './fixtures.js';
 import { discover, parseDiscoveryClaim, type DiscoveryClaim, type DiscoveryResult } from './discover.js';
 import { errorResult, executeScenario } from './execute.js';
 
 const POLL_MS = 2000;
 const HEARTBEAT_MS = 20000;
-const RUN_TIMEOUT_MS = 5 * 60 * 1000;
+const RUN_TIMEOUT_MS = 10 * 60 * 1000;
+const fixtures = await loadFixtures(process.env.QA_FIXTURE_CONFIG);
 
 function required(name: string): string {
   const value = process.env[name];
@@ -86,7 +88,15 @@ async function processRun(claimed: Claim): Promise<void> {
     browser = await chromium.launch({ headless: true });
     for (const scenario of run.scenarios) {
       if (runController.signal.aborted) break;
-      results.push(await executeScenario(browser, run, scenario, allowedOrigins, artifactRoot, runController.signal));
+      results.push(await executeScenario(browser, run, scenario, allowedOrigins, artifactRoot, runController.signal, fixtures, async current => {
+        const response = await post(`/api/worker/runs/${encodeURIComponent(run.id)}/progress`, {
+          lease_token: leaseToken, results: [...results, current]
+        });
+        if (!response.ok) {
+          runController.abort();
+          throw new Error('Journey progress could not be saved');
+        }
+      }));
     }
   } catch {
     // Browser startup or an invalid run snapshot is an execution error for each pending scenario.

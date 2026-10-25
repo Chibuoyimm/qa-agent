@@ -121,7 +121,7 @@ func subscriptionFailure(code string, status int) error {
 }
 
 func readSubscriptionStream(body io.Reader) (providerResponse, error) {
-	limited := &io.LimitedReader{R: body, N: (2 << 20) + 1}
+	limited := &io.LimitedReader{R: body, N: (8 << 20) + 1}
 	scanner := bufio.NewScanner(limited)
 	scanner.Buffer(make([]byte, 4096), 2<<20)
 	var data strings.Builder

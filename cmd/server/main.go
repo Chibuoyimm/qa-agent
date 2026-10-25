@@ -86,12 +86,16 @@ func run(logger *slog.Logger) error {
 	proposals.OpenCode = openCode
 	api := httpapi.New(qa.NewStore(db, allowed), proposals, repository.New(nil), apiToken, workerToken, logger)
 	api.ArtifactDirectory = os.Getenv("QA_ARTIFACT_DIR")
+	api.FixtureProfiles, err = qa.LoadFixtureProfiles(os.Getenv("QA_FIXTURE_CONFIG"))
+	if err != nil {
+		return err
+	}
 	server := &http.Server{
 		Addr:              addr,
 		Handler:           api.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
-		WriteTimeout:      190 * time.Second,
+		WriteTimeout:      420 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
 	server.RegisterOnShutdown(func() { logger.Info("server shut down") })

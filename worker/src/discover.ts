@@ -25,6 +25,7 @@ export async function discover(browser: Browser, input: DiscoveryInput, origins:
   const base = validateBaseUrl(input.base_url, origins);
   if (!safeDiscoveryPath(input.start_path) || !Number.isInteger(input.max_pages) || input.max_pages < 1 || input.max_pages > 5) throw new Error('Invalid discovery scope');
   const setup = input.setup_scenario ? parseScenario(input.setup_scenario) : undefined;
+  if(setup?.steps.some(step=>!['navigate','fill','click','assert_text','assert_visible'].includes(step.action))) throw new Error('Choose a dedicated browser sign-in check instead of a complete journey');
   const secrets = [...new Set(setup?.steps.flatMap(step => step.secret_env ? [process.env[step.secret_env]] : []) ?? [])];
   if (secrets.some(secret => !secret)) throw new Error('A referenced QA_TEST_ secret is unavailable');
   signal.throwIfAborted();

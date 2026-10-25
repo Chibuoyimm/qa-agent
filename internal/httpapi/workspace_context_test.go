@@ -1,9 +1,10 @@
 package httpapi
 
 import (
-	"github.com/Chibuoyimm/qa-agent/internal/qa"
 	"strings"
 	"testing"
+
+	"github.com/Chibuoyimm/qa-agent/internal/qa"
 )
 
 func TestDiscoverySharesKnownAccessWithoutLiteralCredentials(t *testing.T) {
@@ -43,5 +44,19 @@ func TestRunDiscussionSharesOutcomesWithoutActionCredentials(t *testing.T) {
 	}
 	if _, err := runContext(strings.Repeat("x", 48000), run); err == nil {
 		t.Fatal("accepted oversized discussion context")
+	}
+}
+
+func TestJourneyFollowUpKeepsTheFullBusinessExpectations(t *testing.T) {
+	stage := "Publish and accept"
+	steps := []qa.Step{{Action: "phase", Value: &stage}}
+	for i := 0; i < 100; i++ {
+		amount := "1555000.00000000"
+		steps = append(steps, qa.Step{Action: "assert_json_number", Path: "/api/trades/{{trade_id}}", JSONPointer: "/to_amount", Value: &amount})
+	}
+	turn := qa.ChatTurn{Status: "completed", Prompt: "Test the complete trade journey", Proposal: &qa.Proposal{Scenarios: []qa.ScenarioInput{{Name: "Trade", Steps: steps}}}}
+	context, err := chatContext("Source evidence", []qa.ChatTurn{turn})
+	if err != nil || strings.Count(context, "1555000.00000000") != 100 || !strings.Contains(context, turn.Prompt) {
+		t.Fatalf("follow-up lost the complete journey: %v", err)
 	}
 }

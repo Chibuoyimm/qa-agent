@@ -20,6 +20,7 @@ import (
 )
 
 type API struct {
+	FixtureProfiles   []qa.FixtureProfile
 	ArtifactDirectory string
 	store             *qa.Store
 	planner           *planner.Planner
@@ -35,6 +36,14 @@ func New(store *qa.Store, proposals *planner.Planner, repositories *repository.C
 
 func (a *API) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.Handle("GET /api/fixture-profiles", a.authorize(a.apiToken, func(w http.ResponseWriter, r *http.Request) {
+		profiles := a.FixtureProfiles
+		if profiles == nil {
+			profiles = []qa.FixtureProfile{}
+		}
+		writeJSON(w, 200, profiles)
+	}))
+	mux.Handle("POST /api/worker/runs/{id}/progress", a.authorize(a.workerToken, a.runProgress))
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, struct {
 			Status string `json:"status"`
@@ -102,7 +111,7 @@ func (a *API) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		deadline := 25 * time.Second
 		if r.Method == http.MethodPost && (strings.HasSuffix(r.URL.Path, "/proposals") || strings.HasSuffix(r.URL.Path, "/chat")) {
-			deadline = 95 * time.Second
+			deadline = 370 * time.Second
 		} else if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/repositories/sync") {
 			deadline = 50 * time.Second
 		} else if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/repositories/search") {
@@ -267,8 +276,28 @@ func (a *API) prepareProposal(ctx context.Context, projectID string, in planner.
 	if err := a.planner.Validate(in, key); err != nil {
 		return in, nil, err
 	}
-	if _, err := a.store.GetProject(ctx, projectID); err != nil {
+	project, err := a.store.GetProject(ctx, projectID)
+	if err != nil {
 		return in, nil, err
+	}
+	if in.FixtureID != "" {
+		found := false
+		for _, profile := range a.FixtureProfiles {
+			if profile.ID != in.FixtureID {
+				continue
+			}
+			for _, origin := range profile.Origins {
+				if origin == project.BaseURL {
+					raw, _ := json.Marshal(profile)
+					in.Context += "\nSelected engineer-configured test data profile (metadata only): " + string(raw)
+					found = true
+					break
+				}
+			}
+		}
+		if !in.Journey || !found {
+			return in, nil, fmt.Errorf("%w: select an available fixture for this journey's origin", planner.ErrInvalid)
+		}
 	}
 	selected, err := a.store.SelectRepositorySnapshots(ctx, projectID, in.RepositorySnapshotIDs)
 	if err != nil {

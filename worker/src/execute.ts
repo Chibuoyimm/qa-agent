@@ -2,6 +2,8 @@ import { mkdir, rename } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';
 import type { Browser, BrowserContext, Page } from 'playwright';
 import { openGuardedPage } from './browser-context.js';
+import { executeJourney } from './journey.js';
+import type { FixtureProfile } from './fixtures.js';
 import { stepLocator } from './locator.js';
 import { safePart, validateBaseUrl, type Artifact, type Run, type Scenario, type ScenarioResult, type ExecutionStepResult, type Step } from './contract.js';
 
@@ -58,6 +60,7 @@ export async function executeSteps(page: Page, scenario: Scenario, base: URL, si
         case 'assert_text':
           await assertText(page, step, step.value!);
           break;
+        default: throw new Error('Unsupported access setup action');
       }
       results.push({ index, action: step.action, status: 'passed', duration_ms: Date.now() - started });
     } catch (error) {
@@ -71,7 +74,8 @@ export async function executeSteps(page: Page, scenario: Scenario, base: URL, si
   }
 }
 
-export async function executeScenario(browser: Browser, run: Run, scenario: Scenario, allowedOrigins: Set<string>, artifactRoot: string, signal: AbortSignal): Promise<ScenarioResult> {
+export async function executeScenario(browser: Browser, run: Run, scenario: Scenario, allowedOrigins: Set<string>, artifactRoot: string, signal: AbortSignal, profiles: FixtureProfile[] = [], progress?: (result: ScenarioResult) => Promise<void>): Promise<ScenarioResult> {
+  if (scenario.steps.some(step => !['navigate','fill','click','assert_text','assert_visible'].includes(step.action))) return executeJourney(browser,run,scenario,allowedOrigins,artifactRoot,signal,profiles,progress);
   const started = Date.now();
   const artifacts: Artifact[] = [];
   const stepResults: ExecutionStepResult[] = [];
