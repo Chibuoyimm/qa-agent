@@ -12,3 +12,7 @@
 .journey-controls,.journey-plan-summary{padding:16px;border:1px solid var(--line,#dce3dd);border-radius:12px;background:#f5f8f3;margin:12px 0}.journey-controls p,.journey-plan-summary p{font-size:14px;line-height:1.6;color:#496054;margin:8px 0}.journey-controls select{width:100%;margin-top:6px}.recorded-step:has(>span:last-child:empty){opacity:.7}
 
 .journey-progress{margin:20px 0}.journey-progress ol{list-style:none;padding:0;margin:12px 0}.journey-progress li{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:14px;background:white;border:1px solid #dce3dd;border-radius:10px;margin:6px 0}.journey-progress small{display:block;margin-top:4px;color:#52675e}.journey-progress .pill{white-space:normal;text-align:center}@media(max-width:600px){.journey-progress li{align-items:flex-start;flex-direction:column}}
+
+.planning-recovery { padding: 1rem; border: 1px solid var(--line, #d9e1dc); border-radius: 12px; background: var(--surface, #fff); }
+.planning-recovery p { overflow-wrap: anywhere; }
+.planning-recovery .flow-row { flex-wrap: wrap; gap: .6rem; }

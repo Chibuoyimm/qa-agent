@@ -11,6 +11,8 @@ export async function verifyWorkspaceUI(page, api, templates, goodURL, badURL, w
   await api(`/api/projects/${app.id}/journeys`,{name:'Permissions'});
   await api(`/api/projects/${app.id}/journeys`,{name:'Invitations'});
   let calls=0;
+  const draftingFailure='The AI response ended before a complete plan arrived. The partial response was not saved as a plan. Try drafting again. No checks were run.';
+  const retainedContext='Independent requirements: paid revenue excludes refunds and cancelled orders. Preserve these expectations when retrying.';
   const chatPattern=`**/api/projects/${app.id}/tasks/*/chat`;
   await page.route(chatPattern,async route=>{
     if(route.request().method()==='GET')return route.continue();
@@ -22,8 +24,13 @@ export async function verifyWorkspaceUI(page, api, templates, goodURL, badURL, w
     const discovery=await api(`/api/discoveries/${task.discovery_id}`);
     assert.equal(discovery.status,'completed');
     assert.equal(discovery.setup_scenario.id,setup.id);
+    if(calls===1){
+      insertFixtureTurn({id:input.request_id,project_id:app.id,task_id:taskID,prompt:input.prompt,status:'error',reply:draftingFailure,failure:{code:'incomplete_response',retryable:true}});
+      await route.fulfill({status:502,json:{error:draftingFailure}});
+      return;
+    }
     const proposed=templates.slice(0,3).map((item,index)=>({...item,approved:false,...(index===1?{expected_outcome:'Exactly 2 orders are displayed.',steps:item.steps.map(step=>step.action==='assert_text'&&step.test_id==='dashboard-orders'?{...step,value:'2 orders'}:step)}:{})}));
-    const proposal={provider:'openai',model:'workspace-fixture',context_sha256:'fixture',discovery_id:discovery.id,scenarios:calls===1?[]:proposed,questions:calls===1?['What is the approved revenue?']:[],assumptions:[]};
+    const proposal={provider:'openai',model:'workspace-fixture',context_sha256:'fixture',discovery_id:discovery.id,scenarios:calls===2?[]:proposed,questions:calls===2?['What is the approved revenue?']:[],assumptions:[]};
     insertFixtureTurn({id:input.request_id,project_id:app.id,task_id:taskID,prompt:input.prompt,proposal});
     const turn=(await api(`/api/projects/${app.id}/tasks/${taskID}/chat`)).turns.find(item=>item.id===input.request_id);
     await route.fulfill({json:turn});
@@ -45,7 +52,26 @@ export async function verifyWorkspaceUI(page, api, templates, goodURL, badURL, w
   assert.equal(await page.getByRole('combobox',{name:'Sign-in or access setup',exact:true}).inputValue(),setup.id,'Verified access is reused by the request');
   await page.locator('.chat-model-settings:visible > summary').click();
   await page.getByLabel('OpenAI API key',{exact:true}).filter({visible:true}).fill('workspace-transient-key');
+  await page.getByRole('textbox',{name:/^Application context/}).filter({visible:true}).fill(retainedContext);
   await page.getByRole('textbox',{name:'Your message',exact:true}).fill('Test revenue reporting');
+  await page.getByRole('checkbox',{name:/I agree to send this message/}).check();
+  await page.getByRole('button',{name:'Send message',exact:true}).click();
+  await page.getByRole('button',{name:'Review and retry',exact:true}).waitFor({timeout:90000});
+  const failedTaskID=new URLSearchParams(page.url().split('?')[1]).get('task');
+  assert.equal((await api(`/api/projects/${app.id}/tasks/${failedTaskID}/chat`)).turns.at(-1).failure.code,'incomplete_response');
+  assert.equal((await api(`/api/projects/${app.id}/runs`)).length,0,'Failed planning must not queue tests');
+  await page.reload();
+  await page.getByLabel('Workspace access token',{exact:true}).fill(apiToken);
+  await page.getByRole('button',{name:'Open workspace',exact:true}).click();
+  await page.getByRole('button',{name:'Review and retry',exact:true}).waitFor();
+  await page.getByRole('button',{name:'Review and retry',exact:true}).click();
+  assert.equal(calls,1,'Reviewing a failed request does not automatically call a model');
+  assert.equal(await page.getByRole('textbox',{name:'Your message',exact:true}).inputValue(),'Test revenue reporting');
+  assert.equal(await page.getByRole('checkbox',{name:/I agree to send this message/}).isChecked(),false,'Retry requires fresh consent');
+  await page.locator('.chat-model-settings:visible > summary').click();
+  assert.equal(await page.getByRole('textbox',{name:/^Application context/}).filter({visible:true}).inputValue(),retainedContext,'Browser-saved context survives failure and reload');
+  assert.equal(await page.getByLabel('OpenAI API key',{exact:true}).filter({visible:true}).inputValue(),'','Provider keys must not be restored');
+  await page.getByLabel('OpenAI API key',{exact:true}).filter({visible:true}).fill('workspace-transient-key');
   await page.getByRole('checkbox',{name:/I agree to send this message/}).check();
   await page.getByRole('button',{name:'Send message',exact:true}).click();
   await page.getByText('What is the approved revenue?',{exact:true}).waitFor({timeout:90000});
@@ -119,7 +145,7 @@ export async function verifyWorkspaceUI(page, api, templates, goodURL, badURL, w
   const saved=await api(`/api/projects/${app.id}/tasks/${taskID}`);
   assert.equal(saved.approvals.length,1);
   assert.equal(saved.approvals[0].scenario_ids.length,2);
-  assert.equal(calls,2,'Run, review, recheck and reload do not call a model');
+  assert.equal(calls,3,'Only explicit drafting requests call a model; run, review, recheck and reload do not');
   await page.getByRole('button',{name:'Coverage',exact:true}).click();
   await page.locator('.journey-card').filter({hasText:'Invitations'}).getByRole('button',{name:'Test this journey',exact:true}).click();
   await page.getByText('Journey · Invitations',{exact:true}).waitFor();
@@ -130,5 +156,5 @@ export async function verifyWorkspaceUI(page, api, templates, goodURL, badURL, w
   assert.equal(await page.locator('.history-group').count(),1,'Rechecks are grouped with the source run');
   assert.equal(await page.locator('.history-attempt').count(),2);
   await page.unroute(chatPattern);
-  return {name:'Task questions, real discovery, edited/selective batch approval, real failure/evidence, finding review, frozen deployment recheck, unique journey coverage and reload persistence',status:'passed'};
+  return {name:'Task planning failure/retry recovery, questions, real discovery, edited/selective batch approval, real failure/evidence, finding review, frozen deployment recheck, unique journey coverage and reload persistence',status:'passed'};
 }

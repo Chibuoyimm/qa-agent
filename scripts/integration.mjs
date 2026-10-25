@@ -459,8 +459,8 @@ try {
     observations.push(await verifyChatUI(page, api, healthy.project.id, faulty.project.id, templates[0], waitRun, evidence, apiToken));
     observations.push(await verifyWorkspaceUI(page, api, templates, goodURL, badURL, waitRun, evidence, apiToken, fixture => {
       const hex=Buffer.from(JSON.stringify(fixture)).toString('hex');
-      command('docker',['exec',container,'psql','-U','qa','-d','qa_proof','-c',`INSERT INTO chat_turns(id,project_id,task_id,fingerprint,prompt,status,reply,proposal)
-        SELECT data->>'id',data->>'project_id',data->>'task_id','synthetic-inference',data->>'prompt','completed','Review the proposed checks.',data->'proposal'
+      command('docker',['exec',container,'psql','-U','qa','-d','qa_proof','-c',`INSERT INTO chat_turns(id,project_id,task_id,fingerprint,prompt,status,reply,proposal,failure)
+        SELECT data->>'id',data->>'project_id',data->>'task_id','synthetic-inference',data->>'prompt',COALESCE(data->>'status','completed'),COALESCE(data->>'reply','Review the proposed checks.'),data->'proposal',data->'failure'
         FROM (SELECT convert_from(decode('${hex}','hex'),'UTF8')::jsonb data) fixture`]);
     }));
     assert.deepEqual(errors, [], 'AI proposal flow must not throw browser errors');

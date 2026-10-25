@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { AlertCircle, ArrowRight, CheckCircle2, LoaderCircle, MessageSquare, Play, RefreshCw, ShieldCheck, Square } from 'lucide-react'
 import AiProposals from './AiProposals'
+import PlanningRecovery from './PlanningRecovery'
 import { api, formatDate, isActive, providerName, type ChatPage, type ChatRunAction, type ChatTurn, type Project, type Run, type Scenario, type ScenarioInput } from './api'
 
 const requestID = () => crypto.randomUUID().replaceAll('-', '')
@@ -52,6 +53,7 @@ export default function ChatWorkspace({ token, project, scenarios, onReview, onO
   onReview: (input: ScenarioInput) => void; onOpenRun: (id: string) => void; onRunQueued: () => void
 }) {
   const [turns, setTurns] = useState<ChatTurn[]>([])
+  const [prefill, setPrefill] = useState<{text: string; id: number}>()
   const [loading, setLoading] = useState(true)
   const [hasOlder, setHasOlder] = useState(false)
   const [error, setError] = useState('')
@@ -148,7 +150,7 @@ export default function ChatWorkspace({ token, project, scenarios, onReview, onO
         {turns.map(turn => <article className="chat-exchange" key={turn.id}>
           <div className="chat-user-message"><small>You · {formatDate(turn.created_at)}</small><p>{turn.prompt}</p></div>
           <div className="chat-agent-message"><div className="chat-agent-label"><MessageSquare size={16} /><strong>QA Agent</strong>{turn.proposal && <small>{providerName(turn.proposal.provider)} · {turn.proposal.model}</small>}</div>
-            {turn.status === 'pending' ? <p><LoaderCircle size={15} className="spin" />Working on your request…</p> : <p>{turn.reply}</p>}
+            {turn.status === 'error' ? <PlanningRecovery turn={turn} disabled={busy} onRetry={text => setPrefill({text, id: Date.now()})} /> : turn.status === 'pending' ? <p><LoaderCircle size={15} className="spin" />Working on your request…</p> : <p>{turn.reply}</p>}
             {turn.proposal && <>
               {turn.proposal.questions.length > 0 && <div className="chat-questions"><strong>Details I need</strong><ol>{turn.proposal.questions.map((question, i) => <li key={i}>{question}</li>)}</ol></div>}
               {turn.proposal.scenarios.map((draft, i) => <section className="chat-draft" key={i}><span className="approval-label is-unapproved">DRAFT · REVIEW REQUIRED</span><h3>{draft.name}</h3><p>{draft.expected_outcome}</p><div><small>{draft.steps.length} browser steps</small><button className="button button-outline" onClick={() => onReview({ ...draft, approved: false })}>Review check <ArrowRight size={14} /></button></div></section>)}
@@ -163,7 +165,7 @@ export default function ChatWorkspace({ token, project, scenarios, onReview, onO
       <div ref={bottom} />
     </div>
     {savedHere.length > 0 && <div className="chat-saved"><strong>Reviewed checks saved</strong>{savedHere.map(scenario => <div key={scenario.id}><span>{scenario.name} · {scenario.approved ? 'approved' : 'awaiting approval'}</span>{scenario.approved && <button className="link-button" disabled={busy} onClick={() => runFromButton(`Run ${scenario.name}`, 'selected', undefined, [scenario.id])}>Run this check <Play size={13} /></button>}</div>)}</div>}
-    <AiProposals token={token} projectId={project.id} onClose={() => {}} onReview={onReview} conversation={{ disabled: busy || loading, send, command: (prompt, action, signal) => launch(prompt, action, signal) }} />
+    <AiProposals token={token} projectId={project.id} onClose={() => {}} onReview={onReview} conversation={{ prefill, draftKey: `qa-legacy-chat-draft:${project.id}`, disabled: busy || loading, send, command: (prompt, action, signal) => launch(prompt, action, signal) }} />
     <p className="chat-storage-note">Conversation history is saved for this project. App context and transient provider keys are not saved in chat. Keep passwords and connection keys out of messages.</p>
   </div>
 }

@@ -382,6 +382,7 @@ export type ChatTurn = {
   status: 'pending' | 'completed' | 'error'
   reply: string
   proposal?: AiProposalResponse
+  failure?: { code: string; retryable: boolean; detail?: string }
   run_id?: string
   created_at: string
 }
