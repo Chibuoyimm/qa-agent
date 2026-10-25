@@ -24,7 +24,7 @@ check:
 	go test ./...
 	go vet ./...
 	cd worker && npm run check && npm test
-	cd web && npm run build
+	cd web && npm test && npm run build
 
 integration:
 	node scripts/integration.mjs

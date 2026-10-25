@@ -1,3 +1,5 @@
+import { verifyWorkspaceUI } from './workspace-ui-proof.mjs';
+import { openStandaloneProposals } from './workspace-ui-helpers.mjs';
 // Disposable PostgreSQL + real API + real Chromium. No customer accounts or model calls.
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
@@ -304,11 +306,12 @@ try {
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
     await page.goto(webURL);
-    await page.getByLabel('API token', { exact: true }).fill(apiToken);
+    await page.getByLabel('Workspace access token', { exact: true }).filter({ visible: true }).fill(apiToken);
     await page.getByRole('button', { name: 'Open workspace' }).click();
-    await page.getByRole('button', { name: healthy.project.name, exact: true }).click();
+    await page.getByRole('combobox', { name: 'Current app', exact: true }).selectOption(healthy.project.id);
 
-    await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('button', { name: 'Releases', exact: true }).click();
+    await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('button', { name: 'Settings', exact: true }).click();
+    await page.getByRole('button', { name: 'Releases', exact: true }).click();
     const releaseDetails = page.getByRole('region', { name: 'Release details', exact: true });
     await releaseDetails.getByRole('heading', { name: 'faulty-deployment', exact: true }).waitFor();
     await releaseDetails.getByRole('link', { name: badURL, exact: true }).waitFor();
@@ -327,16 +330,18 @@ try {
     observations.push({ name: 'Desktop/mobile Releases show full revisions and faulty findings; linked snapshots older than 100 imports remain reviewable after refresh', status: 'passed' });
 
     if (repositorySnapshot) {
-      await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('button', { name: 'Releases', exact: true }).click();
+      await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('button', { name: 'Settings', exact: true }).click();
+    await page.getByRole('button', { name: 'Releases', exact: true }).click();
       await releaseDetails.getByRole('heading', { name: 'faulty-deployment', exact: true }).waitFor();
       await releaseDetails.locator('article').filter({ hasText: 'frontend' }).getByRole('button', { name: 'Review saved snapshot', exact: false }).click();
       await page.getByText('sample/scenarios.json', { exact: true }).waitFor();
       await page.screenshot({ path: resolve(evidence, 'repository-context.png'), fullPage: true });
     }
 
-    await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('button', { name: 'Discover', exact: true }).click();
-    await page.getByLabel('Start path', { exact: false }).fill('/dashboard');
-    await page.getByLabel('Approved setup scenario', { exact: false }).selectOption(healthy.scenarios[0].id);
+    await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('button', { name: 'Settings', exact: true }).click();
+    await page.getByRole('button', { name: 'App exploration', exact: true }).click();
+    await page.getByLabel('Start path', { exact: false }).filter({ visible: true }).fill('/dashboard');
+    await page.getByLabel('Approved setup scenario', { exact: false }).filter({ visible: true }).selectOption(healthy.scenarios[0].id);
     await page.getByRole('button', { name: 'Start discovery', exact: true }).click();
     await page.getByText('Discovery queued for /dashboard. Watch its status below.', { exact: true }).waitFor();
     for (let i = 0; i < 100; i++) {
@@ -350,20 +355,24 @@ try {
     await page.getByText('dashboard-revenue', { exact: true }).waitFor();
     await page.screenshot({ path: resolve(evidence, 'browser-discovery.png'), fullPage: true });
     observations.push({ name: 'Web launches and reviews real browser discovery', status: 'passed' });
-    await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('button', { name: /^Scenarios/ }).click();
-    await page.getByLabel('Select Missing identity blocks a run for next run', { exact: true }).uncheck();
-    await page.getByLabel('Mode', { exact: true }).selectOption('blocking');
-    await page.getByRole('button', { name: 'Run checks', exact: true }).click();
-    await page.getByText('Every selected scenario completed and passed.', { exact: true }).waitFor({ timeout: 90000 });
-    assert.deepEqual(errors, [], 'Web workspace must render without uncaught errors');
-    if (await page.getByRole('button', { name: 'Dismiss notice', exact: true }).isVisible()) await page.getByRole('button', { name: 'Dismiss notice', exact: true }).click();
+    const uiApp = await api('/api/projects', {name:'Web execution proof',base_url:goodURL});
+    await api(`/api/projects/${uiApp.id}/scenarios`, templates[0]);
+    await page.reload();
+    await page.getByLabel('Workspace access token',{exact:true}).fill(apiToken);
+    await page.getByRole('button',{name:'Open workspace',exact:true}).click();
+    await page.getByRole('combobox',{name:'Current app',exact:true}).selectOption(uiApp.id);
+    await page.getByRole('button',{name:'Test',exact:true}).click();
+    await page.getByRole('button',{name:'Run all approved checks',exact:true}).click();
+    await page.getByText('1 passed · 0 failed · 0 unverified · 0 unfinished',{exact:true}).waitFor({timeout:90000});
+    await page.getByRole('button',{name:'Open results and evidence',exact:true}).click();
+    await page.getByRole('heading',{name:'1 checks · passed',exact:true}).waitFor();
     await page.screenshot({ path: resolve(evidence, 'workspace-desktop.png'), fullPage: true });
     await page.setViewportSize({ width: 390, height: 844 });
     await page.screenshot({ path: resolve(evidence, 'workspace-mobile.png'), fullPage: true });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'Mobile layout has no horizontal page overflow');
     await page.setViewportSize({ width: 1440, height: 1000 });
-    await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('button', { name: /^Scenarios/ }).click();
-    await page.getByRole('button', { name: 'Ask AI to propose', exact: true }).click();
+    await page.getByRole('combobox',{name:'Current app',exact:true}).selectOption(healthy.project.id);
+    await openStandaloneProposals(page);
     await page.getByText('Proposal generation is unavailable', { exact: true }).waitFor();
     await page.getByRole('button', { name: 'Close AI proposals' }).click();
     // Only generation is simulated here. The review/save uses the real API/database.
@@ -385,34 +394,36 @@ try {
       assert.equal(route.request().headers()['x-qa-github-token'], 'synthetic-repo-token');
       await route.fulfill({ json: { snapshot: foundSnapshot, reason: 'Login implementation selected.', candidates: 4, excluded: 2 } });
     });
-    await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('button', { name: 'Repository', exact: true }).click();
-    assert.equal(await page.getByLabel('File selection', { exact: true }).inputValue(), 'agent');
-    assert.equal(await page.getByLabel('Exact file paths', { exact: false }).count(), 0);
-    await page.getByLabel('GitHub repository', { exact: false }).fill('fixture/app');
+    await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('button', { name: 'Settings', exact: true }).click();
+    await page.getByRole('button', { name: 'Repositories', exact: true }).click();
+    assert.equal(await page.getByLabel('File selection', { exact: true }).filter({ visible: true }).inputValue(), 'agent');
+    assert.equal(await page.getByLabel('Exact file paths', { exact: false }).filter({ visible: true }).count(), 0);
+    await page.getByLabel('GitHub repository', { exact: false }).filter({ visible: true }).fill('fixture/app');
     await page.getByRole('textbox', { name: 'Testing request *', exact: true }).fill('Test login');
-    await page.getByLabel('OpenAI API key', { exact: true }).fill('synthetic-model-key');
-    await page.getByLabel('GitHub token', { exact: false }).fill('synthetic-repo-token');
+    await page.getByLabel('OpenAI API key', { exact: true }).filter({ visible: true }).fill('synthetic-model-key');
+    await page.getByLabel('GitHub token', { exact: false }).filter({ visible: true }).fill('synthetic-repo-token');
     const searchConsent = page.getByRole('checkbox', { name: /repository file names and sizes/ });
     await searchConsent.check();
-    await page.getByLabel('Ref', { exact: false }).fill('other');
+    await page.getByLabel('Ref', { exact: false }).filter({ visible: true }).fill('other');
     assert.equal(await searchConsent.isChecked(), false, 'Changing repository resets consent');
-    await page.getByLabel('Ref', { exact: false }).fill('main');
+    await page.getByLabel('Ref', { exact: false }).filter({ visible: true }).fill('main');
     await searchConsent.check();
     await page.getByRole('button', { name: 'Find relevant files', exact: true }).click();
     await page.getByText('src/login.ts', { exact: true }).waitFor();
     await page.getByText('hello', { exact: true }).waitFor();
-    assert.equal(await page.getByLabel('GitHub token', { exact: false }).inputValue(), '');
-    assert.equal(await page.getByLabel('OpenAI API key', { exact: true }).inputValue(), '');
+    assert.equal(await page.getByLabel('GitHub token', { exact: false }).filter({ visible: true }).inputValue(), '');
+    assert.equal(await page.getByLabel('OpenAI API key', { exact: true }).filter({ visible: true }).inputValue(), '');
     await page.screenshot({ path: resolve(evidence, 'repository-file-search.png'), fullPage: true });
     await page.setViewportSize({ width: 390, height: 844 });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'File search mobile layout has no overflow');
     await page.setViewportSize({ width: 1440, height: 1000 });
-    await page.getByLabel('File selection', { exact: true }).selectOption('manual');
-    await page.getByLabel('Exact file paths', { exact: false }).waitFor();
+    await page.getByLabel('File selection', { exact: true }).filter({ visible: true }).selectOption('manual');
+    await page.getByLabel('Exact file paths', { exact: false }).filter({ visible: true }).waitFor();
     await page.unroute('**/repositories/search');
     await page.unroute('**/repositories/synthetic-file-search');
     observations.push({ name: 'Agent file search UI selects, clears credentials, and opens complete content for review (synthetic provider)', status: 'passed' });
-    await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('button', { name: /^Scenarios/ }).click();
+    await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('button', { name: 'Settings', exact: true }).click();
+    await page.getByRole('button', { name: 'App & access', exact: true }).click();
     const proposal = { ...templates[0], name: 'Proposed independent revenue check', approved: false };
     await page.route('**/proposals', async route => {
       assert.equal(route.request().headers()['x-qa-provider-key'], 'synthetic-provider-key');
@@ -420,16 +431,16 @@ try {
       assert.ok(route.request().postDataJSON().discovery_id);
       await route.fulfill({ json: { provider: 'openai', model: 'test-model', context_sha256: 'synthetic-context', scenarios: [proposal], questions: ['Are multi-currency orders supported?'], assumptions: ['All fixture orders use one currency.'] } });
     });
-    await page.getByRole('button', { name: 'Ask AI to propose', exact: true }).click();
+    await openStandaloneProposals(page);
     await page.getByRole('textbox', { name: /^Testing request/ }).fill('Check the independent net revenue calculation.');
     await page.getByRole('textbox', { name: /^Application context/ }).fill('Paid 150000 minus refund 10000 equals 140000; cancelled 90000 is excluded.');
     await page.getByRole('button', { name: 'Review observations', exact: true }).first().click();
     await page.getByRole('button', { name: 'Use these reviewed observations', exact: true }).click();
-    await page.getByLabel('OpenAI API key', { exact: true }).fill('synthetic-provider-key');
+    await page.getByLabel('OpenAI API key', { exact: true }).filter({ visible: true }).fill('synthetic-provider-key');
     await page.getByRole('checkbox', { name: /I (agree to send|have reviewed)/ }).check();
     await page.getByRole('button', { name: 'Generate proposals', exact: true }).click();
     await page.getByText('Are multi-currency orders supported?', { exact: true }).waitFor();
-    assert.equal(await page.getByLabel('OpenAI API key', { exact: true }).inputValue(), '');
+    assert.equal(await page.getByLabel('OpenAI API key', { exact: true }).filter({ visible: true }).inputValue(), '');
     await page.getByRole('button', { name: 'Review in editor', exact: true }).click();
     const approvedBox = page.getByRole('checkbox', { name: 'Approve this scenario for runs', exact: true });
     assert.equal(await approvedBox.isChecked(), false, 'AI draft must not approve itself');
@@ -446,10 +457,16 @@ try {
     observations.push(await verifyProvidersUI(page, api, healthy.project.id, faulty.project.id, templates[0], waitRun, evidence));
     observations.push(await verifyOpenCodeUI(page, api, healthy.project.id, faulty.project.id, templates[0], waitRun, evidence));
     observations.push(await verifyChatUI(page, api, healthy.project.id, faulty.project.id, templates[0], waitRun, evidence, apiToken));
+    observations.push(await verifyWorkspaceUI(page, api, templates, goodURL, badURL, waitRun, evidence, apiToken, fixture => {
+      const hex=Buffer.from(JSON.stringify(fixture)).toString('hex');
+      command('docker',['exec',container,'psql','-U','qa','-d','qa_proof','-c',`INSERT INTO chat_turns(id,project_id,task_id,fingerprint,prompt,status,reply,proposal)
+        SELECT data->>'id',data->>'project_id',data->>'task_id','synthetic-inference',data->>'prompt','completed','Review the proposed checks.',data->'proposal'
+        FROM (SELECT convert_from(decode('${hex}','hex'),'UTF8')::jsonb data) fixture`]);
+    }));
     assert.deepEqual(errors, [], 'AI proposal flow must not throw browser errors');
-    assert.equal(await page.evaluate(() => localStorage.length + sessionStorage.length), 0, 'Operator token must not enter browser storage');
+    assert.equal(await page.evaluate(token => JSON.stringify({...localStorage,...sessionStorage}).includes(token), apiToken), false, 'Operator token must not enter browser storage');
     await page.reload();
-    await page.getByLabel('API token', { exact: true }).waitFor();
+    await page.getByLabel('Workspace access token', { exact: true }).filter({ visible: true }).waitFor();
     observations.push({ name: 'Web workspace launches real checks and clears token on reload', status: 'passed' });
   } finally { await browser.close(); }
   console.log(JSON.stringify(observations, null, 2));

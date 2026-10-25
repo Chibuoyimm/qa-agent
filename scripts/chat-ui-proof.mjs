@@ -1,3 +1,4 @@
+import { openStandaloneProposals, openEarlierConversations } from './workspace-ui-helpers.mjs';
 // Model replies are synthetic. Review/save, command turns, worker execution,
 // failed-check reruns and run-history reload use the real API and PostgreSQL.
 import assert from 'node:assert/strict';
@@ -30,21 +31,21 @@ export async function verifyChatUI(page, api, healthyID, faultyID, scenario, wai
     fixtureTurns.push(turn);
     await route.fulfill({ json: turn });
   });
-  await page.getByRole('button', { name: 'Chat', exact: true }).click();
+  await openEarlierConversations(page);
   await page.getByRole('heading', { name: 'What would you like to test?', exact: true }).waitFor();
-  await page.locator('.chat-model-settings > summary').click();
-  await page.getByLabel('OpenAI API key', { exact: true }).fill('synthetic-chat-key');
-  await page.getByLabel('Your message', { exact: true }).fill('Test the revenue dashboard');
+  await page.locator('.chat-model-settings:visible > summary').click();
+  await page.getByLabel('OpenAI API key', { exact: true }).filter({ visible: true }).fill('synthetic-chat-key');
+  await page.getByLabel('Your message', { exact: true }).filter({ visible: true }).fill('Test the revenue dashboard');
   const consent = page.getByRole('checkbox', { name: /I agree to send this message/ });
   assert.equal(await page.getByRole('button', { name: 'Send message', exact: true }).isEnabled(), false);
   await consent.check();
   await page.getByRole('button', { name: 'Send message', exact: true }).click();
   await page.getByText('What should the net revenue be?', { exact: true }).waitFor();
-  assert.equal(await page.getByLabel('OpenAI API key', { exact: true }).inputValue(), '');
+  assert.equal(await page.getByLabel('OpenAI API key', { exact: true }).filter({ visible: true }).inputValue(), '');
   assert.equal(await consent.isChecked(), false);
-  await page.getByLabel('Your message', { exact: true }).fill('Paid 150000 less refund 10000 gives 140000; cancelled 90000 is excluded.');
+  await page.getByLabel('Your message', { exact: true }).filter({ visible: true }).fill('Paid 150000 less refund 10000 gives 140000; cancelled 90000 is excluded.');
   await page.getByRole('textbox', { name: /^Application context/ }).fill('Known sample requirements and browser test IDs are supplied for this fixture.');
-  await page.getByLabel('OpenAI API key', { exact: true }).fill('synthetic-chat-key');
+  await page.getByLabel('OpenAI API key', { exact: true }).filter({ visible: true }).fill('synthetic-chat-key');
   await consent.check();
   await page.getByRole('button', { name: 'Send message', exact: true }).click();
   await page.getByRole('heading', { name: proposed.name, exact: true }).waitFor();
@@ -56,7 +57,7 @@ export async function verifyChatUI(page, api, healthyID, faultyID, scenario, wai
   assert.equal(unapproved.approved, false);
   await api(`/api/projects/${healthyID}/chat/runs`, { request_id: randomBytes(16).toString('hex'), prompt: 'Run unapproved draft', action: 'selected', scenario_ids: [unapproved.id], mode: 'blocking' }, { status: 409 });
   await page.getByRole('button', { name: 'Review check', exact: true }).click();
-  await page.getByLabel('Scenario name', { exact: false }).fill('Chat reviewed revenue check');
+  await page.getByLabel('Scenario name', { exact: false }).filter({ visible: true }).fill('Chat reviewed revenue check');
   await page.getByRole('checkbox', { name: 'Approve this scenario for runs', exact: true }).check();
   await page.getByRole('checkbox', { name: /I reviewed the expected outcome/ }).check();
   await page.getByRole('button', { name: 'Create scenario', exact: true }).click();
@@ -72,10 +73,10 @@ export async function verifyChatUI(page, api, healthyID, faultyID, scenario, wai
   assert.ok(selected.run_id);
   assert.equal((await waitRun(selected.run_id)).status, 'passed');
   await page.locator('.chat-run-head .pill-passed').first().waitFor();
-  await page.getByLabel('Your message', { exact: true }).fill('Run all approved checks');
+  await page.getByLabel('Your message', { exact: true }).filter({ visible: true }).fill('Run all approved checks');
   assert.equal(await consent.isChecked(), false);
   await page.getByRole('button', { name: 'Send and run checks', exact: true }).click();
-  await page.getByLabel('Your message', { exact: true }).waitFor({ state: 'visible' });
+  await page.getByLabel('Your message', { exact: true }).filter({ visible: true }).waitFor({ state: 'visible' });
   for (let i = 0; i < 50; i++) {
     history = await api(`/api/projects/${healthyID}/chat`);
     if (history.turns.length === 2) break;
@@ -89,7 +90,7 @@ export async function verifyChatUI(page, api, healthyID, faultyID, scenario, wai
   assert.equal(allRun.status, 'blocked');
   assert.equal(calls, 2, 'Run commands must not call a model');
   await page.locator('.chat-run-head .pill-blocked').first().waitFor();
-  await page.locator('.chat-model-settings > summary').click();
+  await page.locator('.chat-model-settings:visible > summary').click();
   await page.screenshot({ path: resolve(evidence, 'chat-desktop.png'), fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'Mobile chat must fit the viewport');
@@ -97,16 +98,16 @@ export async function verifyChatUI(page, api, healthyID, faultyID, scenario, wai
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.unroute(path);
   await page.reload();
-  await page.getByLabel('API token', { exact: true }).fill(apiToken);
+  await page.getByLabel('Workspace access token', { exact: true }).filter({ visible: true }).fill(apiToken);
   await page.getByRole('button', { name: 'Open workspace', exact: true }).click();
-  await page.getByRole('button', { name: 'Chat', exact: true }).click();
+  await openEarlierConversations(page);
   await page.getByText('Run all approved checks', { exact: true }).last().waitFor();
   assert.equal(await page.getByRole('region', { name: 'Chat run results', exact: true }).count(), 2, 'Real command history survives reload');
-  await page.getByRole('button', { name: 'Faulty correctness proof', exact: true }).click();
-  await page.getByRole('button', { name: 'Chat', exact: true }).click();
+  await page.getByRole('combobox', { name: 'Current app', exact: true }).selectOption(faultyID);
+  await openEarlierConversations(page);
   assert.equal(await page.locator('.chat-user-message').count(), 0, 'Conversation is scoped to project');
-  await page.getByLabel('Chat run mode', { exact: true }).selectOption('blocking');
-  await page.getByLabel('Your message', { exact: true }).fill('Run a full check');
+  await page.getByLabel('Chat run mode', { exact: true }).filter({ visible: true }).selectOption('blocking');
+  await page.getByLabel('Your message', { exact: true }).filter({ visible: true }).fill('Run a full check');
   await page.getByRole('button', { name: 'Send and run checks', exact: true }).click();
   await page.getByRole('region', { name: 'Chat run results', exact: true }).waitFor();
   const faultyTurn = (await api(`/api/projects/${faultyID}/chat`)).turns.at(-1);
@@ -122,6 +123,6 @@ export async function verifyChatUI(page, api, healthyID, faultyID, scenario, wai
   assert.deepEqual(rerun.scenarios.map(item => item.id), failed.results.filter(item => item.status === 'failed').map(item => item.scenario_id));
   for (const check of rerun.scenarios) assert.equal(check.expected_outcome, failed.scenarios.find(item => item.id === check.id).expected_outcome);
   await page.getByRole('button', { name: 'Full report', exact: true }).last().click();
-  await page.getByRole('heading', { name: 'Runs & results', exact: true }).waitFor();
+  await page.getByRole('heading', { name: /checks · failed/, exact: true }).waitFor();
   return { name: 'Chat questions, follow-ups and review (synthetic model), real approved execution, all-check commands, persisted run conversation, project isolation and failed-only reruns', status: 'passed' };
 }

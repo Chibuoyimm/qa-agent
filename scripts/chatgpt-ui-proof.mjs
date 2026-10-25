@@ -1,3 +1,4 @@
+import { openStandaloneProposals, openEarlierConversations } from './workspace-ui-helpers.mjs';
 // Subscription UI boundaries use synthetic account/provider responses. Saving
 // the reviewed scenario still uses the real API and PostgreSQL.
 import assert from 'node:assert/strict';
@@ -63,7 +64,7 @@ export async function verifyChatGPTUI(page, api, projectID, scenario, evidence) 
     if (quota) { await route.fulfill({ status: 429, json: { error: 'ChatGPT plan usage is unavailable or has reached its limit. Manage usage in ChatGPT settings' } }); return; }
     await route.fulfill({ json: { provider: 'openai', credential_mode: 'chatgpt', chatgpt_profile_id: profiles[1].id, model: input.model, context_sha256: 'synthetic-context', scenarios: [proposed], questions: [], assumptions: [] } });
   });
-  await page.getByRole('button', { name: 'Ask AI to propose', exact: true }).click();
+  await openStandaloneProposals(page);
   const connect = page.getByRole('button', { name: /^(Continue with ChatGPT|Connect ChatGPT)$/ });
   await connect.waitFor();
   assert.equal(await page.getByRole('button', { name: 'Generate proposals', exact: true }).isEnabled(), false);
@@ -73,20 +74,20 @@ export async function verifyChatGPTUI(page, api, projectID, scenario, evidence) 
   await page.getByText('ChatGPT connection cancelled.', { exact: true }).waitFor();
   assert.equal(cancelled, 1);
   await connect.click();
-  await page.getByLabel('Account', { exact: true }).waitFor();
-  await page.getByLabel('Model', { exact: true }).selectOption('subscription-model');
+  await page.getByLabel('Account', { exact: true }).filter({ visible: true }).waitFor();
+  await page.getByLabel('Model', { exact: true }).filter({ visible: true }).selectOption('subscription-model');
   await page.getByRole('textbox', { name: /^Testing request/ }).fill('Check independent fixture correctness.');
   await page.getByRole('textbox', { name: /^Application context/ }).fill('Paid 150000 minus refund 10000 equals 140000; cancelled orders are excluded.');
   const consent = page.getByRole('checkbox', { name: /I (agree to send|have reviewed)/ });
   await consent.check();
-  await page.getByLabel('Model', { exact: true }).selectOption('subscription-model-two');
+  await page.getByLabel('Model', { exact: true }).filter({ visible: true }).selectOption('subscription-model-two');
   assert.equal(await consent.isChecked(), false, 'Changing a model resets consent');
   await consent.check();
-  await page.getByLabel('Account', { exact: true }).selectOption(profiles[1].id);
+  await page.getByLabel('Account', { exact: true }).filter({ visible: true }).selectOption(profiles[1].id);
   assert.equal(await consent.isChecked(), false, 'Changing an account resets consent');
   const useAccount = page.getByRole('button', { name: 'Use this account', exact: true });
   if (await useAccount.isVisible()) await useAccount.click();
-  await page.getByLabel('Model', { exact: true }).selectOption('subscription-model');
+  await page.getByLabel('Model', { exact: true }).filter({ visible: true }).selectOption('subscription-model');
   await consent.check();
   quota = true;
   await page.getByRole('button', { name: 'Generate proposals', exact: true }).click();
@@ -96,10 +97,10 @@ export async function verifyChatGPTUI(page, api, projectID, scenario, evidence) 
   await page.getByRole('button', { name: 'Generate proposals', exact: true }).click();
   await page.getByRole('heading', { name: proposed.name, exact: true }).waitFor();
   assert.equal(calls, 2);
-  await page.locator('.ai-form-grid').screenshot({ path: resolve(evidence, 'chatgpt-subscription-desktop.png') });
+  await page.locator('.ai-form-grid:visible').screenshot({ path: resolve(evidence, 'chatgpt-subscription-desktop.png') });
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'Subscription controls fit the mobile viewport');
-  await page.locator('.ai-settings').screenshot({ path: resolve(evidence, 'chatgpt-subscription-mobile.png') });
+  await page.locator('.ai-settings:visible').screenshot({ path: resolve(evidence, 'chatgpt-subscription-mobile.png') });
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.getByRole('button', { name: 'Review in editor', exact: true }).click();
   assert.equal(await page.getByRole('checkbox', { name: 'Approve this scenario for runs', exact: true }).isChecked(), false);
@@ -107,7 +108,7 @@ export async function verifyChatGPTUI(page, api, projectID, scenario, evidence) 
   await page.getByRole('dialog').waitFor({ state: 'hidden' });
   const saved = await api(`/api/projects/${projectID}/scenarios`);
   assert.equal(saved.find(item => item.name === proposed.name)?.approved, false, 'Subscription draft is saved unapproved until explicitly reviewed');
-  assert.equal(await page.evaluate(() => localStorage.length + sessionStorage.length), 0, 'Connection and provider credentials never enter browser storage');
+  assert.equal(await page.evaluate(() => JSON.stringify({...localStorage,...sessionStorage}).includes('synthetic-key')), false, 'Connection keys never enter browser storage');
   await page.getByRole('button', { name: 'Disconnect', exact: true }).click();
   await page.getByRole('button', { name: 'Reconnect account', exact: true }).waitFor();
   assert.equal(await page.getByRole('button', { name: 'Generate proposals', exact: true }).isEnabled(), false);

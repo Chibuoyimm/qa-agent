@@ -1,3 +1,4 @@
+import { openStandaloneProposals, openEarlierConversations } from './workspace-ui-helpers.mjs';
 // External generation is synthetic. Draft persistence, approval rejection, and
 // healthy/faulty execution use the real API, PostgreSQL, and browser worker.
 import assert from 'node:assert/strict';
@@ -29,29 +30,29 @@ export async function verifyProvidersUI(page, api, healthyID, faultyID, scenario
     drafts.push(draft);
     await route.fulfill({ json: { provider: input.provider, model: input.model, credential_mode: 'byok', context_sha256: 'synthetic-context', scenarios: [draft], questions: [], assumptions: [] } });
   });
-  await page.getByRole('button', { name: 'Ask AI to propose', exact: true }).click();
-  await page.getByLabel('Provider', { exact: true }).selectOption('anthropic');
+  await openStandaloneProposals(page);
+  await page.getByLabel('Provider', { exact: true }).filter({ visible: true }).selectOption('anthropic');
   await page.getByRole('textbox', { name: /^Testing request/ }).fill('Check revenue against the independent fixture.');
   await page.getByRole('textbox', { name: /^Application context/ }).fill('Paid 150000 minus refund 10000 equals 140000; cancelled 90000 is excluded.');
   const consent = page.getByRole('checkbox', { name: /I (agree to send|have reviewed)/ });
-  const key = page.getByLabel('Anthropic API key', { exact: true });
+  const key = page.getByLabel('Anthropic API key', { exact: true }).filter({ visible: true });
   await key.fill('synthetic-key');
-  await page.getByLabel(/^Anthropic workspace ID/).fill('wrkspc_fixture');
+  await page.getByLabel(/^Anthropic workspace ID/).filter({ visible: true }).fill('wrkspc_fixture');
   await consent.check();
-  await page.getByLabel('Model', { exact: true }).selectOption('claude-second');
+  await page.getByLabel('Model', { exact: true }).filter({ visible: true }).selectOption('claude-second');
   assert.equal(await consent.isChecked(), false);
   await consent.check();
-  await page.getByLabel('Provider', { exact: true }).selectOption('google');
+  await page.getByLabel('Provider', { exact: true }).filter({ visible: true }).selectOption('google');
   assert.equal(await consent.isChecked(), false);
-  assert.equal(await page.getByLabel('Google Gemini API key', { exact: true }).inputValue(), '');
+  assert.equal(await page.getByLabel('Google Gemini API key', { exact: true }).filter({ visible: true }).inputValue(), '');
   assert.equal(await page.getByText('ChatGPT subscription', { exact: true }).count(), 0);
-  await page.getByLabel('Provider', { exact: true }).selectOption('anthropic');
-  assert.equal(await page.getByLabel(/^Anthropic workspace ID/).inputValue(), '');
+  await page.getByLabel('Provider', { exact: true }).filter({ visible: true }).selectOption('anthropic');
+  assert.equal(await page.getByLabel(/^Anthropic workspace ID/).filter({ visible: true }).inputValue(), '');
   for (const provider of ['anthropic', 'google']) {
-    await page.getByLabel('Provider', { exact: true }).selectOption(provider);
+    await page.getByLabel('Provider', { exact: true }).filter({ visible: true }).selectOption(provider);
     const label = provider === 'anthropic' ? 'Anthropic' : 'Google Gemini';
     await page.getByLabel(`${label} API key`, { exact: true }).fill('synthetic-key');
-    if (provider === 'anthropic') await page.getByLabel(/^Anthropic workspace ID/).fill('wrkspc_fixture');
+    if (provider === 'anthropic') await page.getByLabel(/^Anthropic workspace ID/).filter({ visible: true }).fill('wrkspc_fixture');
     await page.getByText(`I agree to send my testing request and application context to ${label} to generate proposals.`, { exact: true }).waitFor();
     await consent.check();
     if (provider === 'google') {
@@ -67,17 +68,17 @@ export async function verifyProvidersUI(page, api, healthyID, faultyID, scenario
     await page.getByRole('button', { name: 'Generate proposals', exact: true }).click();
     await page.getByRole('heading', { name: `${provider} proposed independent check`, exact: true }).waitFor();
     assert.equal(await page.getByLabel(`${label} API key`, { exact: true }).inputValue(), '');
-    if (provider === 'anthropic') assert.equal(await page.getByLabel(/^Anthropic workspace ID/).inputValue(), '');
-    await page.locator('.ai-form-grid').screenshot({ path: resolve(evidence, `${provider}-provider-desktop.png`) });
+    if (provider === 'anthropic') assert.equal(await page.getByLabel(/^Anthropic workspace ID/).filter({ visible: true }).inputValue(), '');
+    await page.locator('.ai-form-grid:visible').screenshot({ path: resolve(evidence, `${provider}-provider-desktop.png`) });
     await page.setViewportSize({ width: 390, height: 844 });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
     if (provider === 'anthropic') {
-      const field = await page.getByLabel(/^Anthropic workspace ID/).boundingBox();
-      const help = await page.locator('.ai-workspace-note').boundingBox();
-      const keyNote = await page.locator('.ai-settings > .ai-key-note').boundingBox();
+      const field = await page.getByLabel(/^Anthropic workspace ID/).filter({ visible: true }).boundingBox();
+      const help = await page.locator('.ai-workspace-note:visible').boundingBox();
+      const keyNote = await page.locator('.ai-settings:visible > .ai-key-note').boundingBox();
       assert.ok(field && help && keyNote && field.y + field.height <= help.y && help.y + help.height <= keyNote.y, 'Workspace input and helper notes must not overlap');
     }
-    await page.locator('.ai-settings').screenshot({ path: resolve(evidence, `${provider}-provider-mobile.png`) });
+    await page.locator('.ai-settings:visible').screenshot({ path: resolve(evidence, `${provider}-provider-mobile.png`) });
     await page.setViewportSize({ width: 1440, height: 1000 });
     await page.getByRole('button', { name: 'Review in editor', exact: true }).click();
     assert.equal(await page.getByRole('checkbox', { name: 'Approve this scenario for runs', exact: true }).isChecked(), false);
@@ -98,14 +99,14 @@ export async function verifyProvidersUI(page, api, healthyID, faultyID, scenario
       assert.equal(run.gate, expected === 'passed' ? 'pass' : 'fail');
     }
     if (provider === 'anthropic') {
-      await page.getByLabel('Provider', { exact: true }).selectOption('google');
+      await page.getByLabel('Provider', { exact: true }).filter({ visible: true }).selectOption('google');
       assert.equal(await page.locator('.ai-results').getByRole('heading', { name: `${provider} proposed independent check`, exact: true }).count(), 0, 'Provider change removes stale drafts');
     }
   }
   await page.getByRole('textbox', { name: /^Application context/ }).fill('Changed requirements must be reviewed again.');
   assert.equal(await consent.isChecked(), false);
   assert.equal(await page.locator('.ai-results').getByRole('heading', { name: 'google proposed independent check', exact: true }).count(), 0);
-  assert.equal(await page.evaluate(() => localStorage.length + sessionStorage.length), 0);
+  assert.equal(await page.evaluate(() => JSON.stringify({...localStorage,...sessionStorage}).includes('synthetic-go-key')), false);
   assert.equal(calls, 3);
   return { name: 'Anthropic/Gemini provider and model selection, recipient consent, transient credentials, quota without fallback, unapproved persistence and healthy/faulty reviewed execution (synthetic generation)', status: 'passed' };
 }

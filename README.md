@@ -21,7 +21,7 @@ make install
 make db
 ```
 
-In four terminals, load `.env` as above and run each process:
+Before starting services, set `QA_ARTIFACT_DIR` in `.env` to an absolute directory on this machine that both the API and worker can access. In four terminals, load `.env` as above and run each process:
 
 ```sh
 make server  # Go API at http://127.0.0.1:8080
@@ -36,9 +36,15 @@ The `.env.example` database and sample login values are explicitly synthetic loc
 
 To see the revenue defect, stop the sample and restart it with `QA_SAMPLE_DEFECT=1 make sample`. The approved expectation remains 140000; the broken dashboard displays 230000. The assertion fails without changing its expectation.
 
+## Testing workspace
+
+Use **Test** to describe a journey, review the proposed checks, and approve a plan. **Results** provides real screenshots, recordings, finding review and deployment rechecks with frozen expectations. **Coverage** counts unique checks and names untested journeys. App access, AI connections, GitHub/Azure Repos, exploration and releases are under **Settings**. [Flow, evidence configuration and API details](docs/testing-workspace.md).
+
+Set `QA_ARTIFACT_DIR` to the same absolute directory for API and worker so browser evidence can open in Results. Credentials remain in their existing protected locations.
+
 ## Release pipelines
 
-Use `bin/qa release --manifest release.json --timeout 10m --json` to wait for a deployment, import its exact frontend/backend revisions, run approved checks, and return the gate. The **Releases** page shows the deployment URL, commits, frozen expectations, and findings. A stable deployment key lets pipeline retries resume the original run without executing actions again. See [the manifest, API, and GitHub Actions setup](docs/deployment-qa.md), including a reusable workflow example.
+Use `bin/qa release --manifest release.json --timeout 10m --json` to wait for a deployment, import its exact frontend/backend revisions, run approved checks, and return the gate. The **Settings → Releases** page shows the deployment URL, commits, frozen expectations, and findings. A stable deployment key lets pipeline retries resume the original run without executing actions again. See [the manifest, API, and GitHub Actions setup](docs/deployment-qa.md), including a reusable workflow example.
 
 For a standalone run against the project's default URL:
 
