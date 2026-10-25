@@ -69,7 +69,7 @@ export default function ChatWorkspace({ token, project, scenarios, onReview, onO
     const page = await api<ChatPage>(token, `/api/projects/${encodeURIComponent(project.id)}/chat`, { signal })
     if (!alive.current || signal?.aborted) return
     setTurns(previous => {
-      const latest = new Map(page.turns.map(turn => [turn.id, turn]))
+      const latest = new Map(page.turns.filter(turn => !turn.task_id).map(turn => [turn.id, turn]))
       for (const turn of previous) if (!latest.has(turn.id)) latest.set(turn.id, turn)
       return [...latest.values()].sort((a, b) => a.sequence - b.sequence)
     })
@@ -131,7 +131,7 @@ export default function ChatWorkspace({ token, project, scenarios, onReview, onO
       const page = await api<ChatPage>(token, `/api/projects/${encodeURIComponent(project.id)}/chat?before=${turns[0].sequence}`)
       if (!alive.current) return
       loadedEarlier.current = true
-      setTurns(previous => [...page.turns.filter(turn => !previous.some(item => item.id === turn.id)), ...previous]); setHasOlder(page.has_older)
+      setTurns(previous => [...page.turns.filter(turn => !turn.task_id && !previous.some(item => item.id === turn.id)), ...previous]); setHasOlder(page.has_older)
     } catch (err) { if (alive.current) setError(message(err)) }
     finally { if (alive.current) setOlderLoading(false) }
   }

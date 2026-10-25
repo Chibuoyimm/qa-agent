@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useId, useRef, useState, type FormEvent } from 'react'
 import {
   AlertCircle, ArrowRight, Check, CircleHelp, ExternalLink, Info, KeyRound, LoaderCircle,
   LockKeyhole, RefreshCw, ShieldCheck, Sparkles, Square, X,
@@ -21,11 +21,16 @@ function errorMessage(error: unknown, fallback: string): string {
 
 type ConversationComposer = {
   disabled: boolean
+  draftKey?: string
+  initialPrompt?: string
+  taskContext?: boolean
   send: (prompt: string, options: RequestInit) => Promise<void>
   command: (prompt: string, action: ChatRunAction, signal: AbortSignal) => Promise<void>
 }
 
-export default function AiProposals({ token, projectId, onClose, onReview, conversation, repositorySearch }: {
+export default function AiProposals({ token, projectId, onClose, onReview, conversation, repositorySearch, settingsOnly = false, configRevision = 0 }: {
+  settingsOnly?: boolean
+  configRevision?: number
   token: string
   projectId: string
   onClose: () => void
@@ -33,6 +38,10 @@ export default function AiProposals({ token, projectId, onClose, onReview, conve
   conversation?: ConversationComposer
   repositorySearch?: { identity: string; ready: boolean; send: (options: RequestInit) => Promise<void>; onBusy: (busy: boolean) => void }
 }) {
+  const idPrefix = useId()
+  const fieldID = (name: string) => `${idPrefix}-${name}`
+  const [modelsRevision, setModelsRevision] = useState(0)
+  const [loadedDraft, setLoadedDraft] = useState('')
   const [config, setConfig] = useState<AiConfig | null>(null)
   const [configLoading, setConfigLoading] = useState(true)
   const [configError, setConfigError] = useState('')
@@ -71,6 +80,32 @@ export default function AiProposals({ token, projectId, onClose, onReview, conve
   const recipient = providerName(provider)
   const selectedProfile = chatgpt?.profiles.find(profile => profile.id === selectedProfileId)
   const loginPending = chatgpt?.login?.status === 'pending'
+
+
+  useEffect(() => {
+    const key = conversation?.draftKey
+    if (!key) return
+    try {
+      const saved = JSON.parse(sessionStorage.getItem(key) || 'null') as { prompt?: string; context?: string; snapshots?: string[]; discovery?: string } | null
+      setPrompt(saved?.prompt ?? conversation?.initialPrompt ?? '')
+      setContext(saved?.context ?? '')
+      setSnapshotIds(saved?.snapshots ?? [])
+      setDiscoveryId(saved?.discovery ?? '')
+    } catch { setPrompt(conversation?.initialPrompt ?? '') }
+    setConsent(false)
+    setLoadedDraft(key)
+  }, [conversation?.draftKey])
+  useEffect(() => {
+    if (conversation?.initialPrompt && !prompt && !generating) setPrompt(conversation.initialPrompt)
+  }, [conversation?.initialPrompt])
+  useEffect(() => {
+    if (!conversation?.draftKey || loadedDraft !== conversation.draftKey) return
+    try { sessionStorage.setItem(loadedDraft, JSON.stringify({ prompt, context, snapshots: snapshotIds, discovery: discoveryId })) } catch { /* Draft storage may be unavailable in private browsing. */ }
+  }, [prompt, context, snapshotIds, discoveryId, loadedDraft, conversation?.draftKey])
+  useEffect(() => {
+    if (!config || configLoading || !model) return
+    try { localStorage.setItem(`qa-ai-choice:${projectId}`, JSON.stringify({ provider, credentialMode, model, selectedProfileId })) } catch { /* Connection keys are never persisted. */ }
+  }, [config, configLoading, projectId, provider, credentialMode, model, selectedProfileId])
 
   useEffect(() => { selectedProfileIdRef.current = selectedProfileId }, [selectedProfileId])
 
@@ -120,6 +155,19 @@ export default function AiProposals({ token, projectId, onClose, onReview, conve
       setProviderKey('')
       setWorkspaceId('')
       setModel(mode === 'chatgpt' ? '' : initial?.models[0] ?? '')
+      try {
+        const preferred = JSON.parse(localStorage.getItem(`qa-ai-choice:${projectId}`) || '{}') as { provider?: AiProvider; credentialMode?: CredentialMode; model?: string }
+        const savedProvider = choices.find(item => item.provider === preferred.provider)
+        const activeProfile = value.chatgpt?.profiles.find(profile => profile.id === value.chatgpt?.active_profile_id && profile.connected && profile.sharing)
+        const eligible = preferred.provider === 'opencode-go' ? value.opencode_enabled && preferred.credentialMode === 'opencode'
+          : preferred.credentialMode === 'chatgpt' ? preferred.provider === 'openai' && Boolean(activeProfile)
+          : savedProvider?.models.length && (preferred.credentialMode === 'managed' ? savedProvider.managed_available : preferred.credentialMode === 'byok' && savedProvider.byok_available)
+        if (eligible && preferred.provider && preferred.credentialMode) {
+          setProvider(preferred.provider); setCredentialMode(preferred.credentialMode)
+          setModel(preferred.credentialMode === 'chatgpt' || preferred.credentialMode === 'opencode' ? '' : savedProvider?.models.find(item => item === preferred.model) ?? savedProvider?.models[0] ?? '')
+        }
+      } catch { /* A saved choice is optional; current provider availability wins. */ }
+
     }).catch(error => {
       if (!abort.signal.aborted) setConfigError(error instanceof Error ? error.message : 'Could not load AI configuration.')
     }).finally(() => { if (!abort.signal.aborted) setConfigLoading(false) })
@@ -134,7 +182,7 @@ export default function AiProposals({ token, projectId, onClose, onReview, conve
       authWindowRef.current = null
       if (pendingLoginId) void api(token, '/api/ai/chatgpt/login/cancel', { method: 'POST', body: JSON.stringify({ login_id: pendingLoginId }) }).catch(() => {})
     }
-  }, [token, projectId])
+  }, [token, projectId, configRevision])
 
   useEffect(() => {
     if (credentialMode !== 'chatgpt' || !chatgpt?.enabled || !selectedProfile?.connected || !selectedProfile.sharing || chatgpt.active_profile_id !== selectedProfile.id) {
@@ -149,11 +197,13 @@ export default function AiProposals({ token, projectId, onClose, onReview, conve
     setModel('')
     void api<ChatGptModel[]>(token, `/api/ai/chatgpt/models?profile_id=${encodeURIComponent(selectedProfile.id)}`, { signal: abort.signal }).then(models => {
       setChatgptModels(models)
-      setModel(models[0]?.slug ?? '')
+      let preferred = ''
+      try { preferred = JSON.parse(localStorage.getItem(`qa-ai-choice:${projectId}`) || '{}').model || '' } catch { /* Use the available default. */ }
+      setModel(models.some(item => item.slug === preferred) ? preferred : models[0]?.slug ?? '')
     }).catch(error => { if (!abort.signal.aborted) setChatgptError(errorMessage(error, 'Could not load ChatGPT models.')) })
       .finally(() => { if (!abort.signal.aborted) setChatgptModelsLoading(false) })
     return () => abort.abort()
-  }, [token, projectId, credentialMode, chatgpt?.active_profile_id, selectedProfile?.id, selectedProfile?.connected, selectedProfile?.sharing])
+  }, [token, projectId, credentialMode, chatgpt?.active_profile_id, selectedProfile?.id, selectedProfile?.connected, selectedProfile?.sharing, modelsRevision])
 
   useEffect(() => {
     if (!chatgpt?.login?.id || chatgpt.login.status !== 'pending') return
@@ -279,7 +329,7 @@ export default function AiProposals({ token, projectId, onClose, onReview, conve
     const currentIdentity = identity.current
     try {
       const status = await api<ChatGptStatus>(token, '/api/ai/chatgpt')
-      if (currentIdentity === identity.current) acceptStatus(status)
+      if (currentIdentity === identity.current) { acceptStatus(status); setModelsRevision(value => value + 1) }
     } catch (error) { if (currentIdentity === identity.current) setChatgptError(errorMessage(error, 'Could not refresh ChatGPT status.')) }
     finally { if (currentIdentity === identity.current) setChatgptBusy(false) }
   }
@@ -377,9 +427,9 @@ export default function AiProposals({ token, projectId, onClose, onReview, conve
   }
 
   return <section className={conversation ? "ai-panel chat-composer" : "ai-panel"} aria-label={repositorySearch ? "Agent file search" : conversation ? "Chat composer" : "AI scenario proposals"}>
-    {!conversation && <div className="ai-panel-head"><div className="ai-panel-icon"><Sparkles size={20} /></div><div><div className="eyebrow">{repositorySearch ? 'AGENT FILE SEARCH' : 'AI ASSISTED DRAFTING'}</div><h2>{repositorySearch ? 'What should the agent inspect?' : 'Ask AI to propose checks'}</h2><p>{repositorySearch ? 'The AI receives file names and sizes to choose relevant files. Review imported content below before using it in Chat.' : 'Describe what you want to test and supply the relevant facts. You review every draft before it can run.'}</p></div><button className="icon-button" onClick={onClose} aria-label={repositorySearch ? "Close file search" : "Close AI proposals"}><X size={19} /></button></div>}
-    {!conversation && !repositorySearch && <div className="ai-boundary"><Info size={16} /><span>Proposals use your request, application context, and any reviewed repository snapshots or browser observations you select. Discovery observations describe what the app showed; they do not establish the expected outcome.</span></div>}
-    {!repositorySearch && <details className="chat-source-settings" open={conversation ? undefined : true}><summary>Review source context</summary>
+    {!conversation && !settingsOnly && <div className="ai-panel-head"><div className="ai-panel-icon"><Sparkles size={20} /></div><div><div className="eyebrow">{repositorySearch ? 'AGENT FILE SEARCH' : 'AI ASSISTED DRAFTING'}</div><h2>{repositorySearch ? 'What should the agent inspect?' : 'Ask AI to propose checks'}</h2><p>{repositorySearch ? 'The AI receives file names and sizes to choose relevant files. Review imported content below before using it in Chat.' : 'Describe what you want to test and supply the relevant facts. You review every draft before it can run.'}</p></div><button className="icon-button" onClick={onClose} aria-label={repositorySearch ? "Close file search" : "Close AI proposals"}><X size={19} /></button></div>}
+    {!conversation && !repositorySearch && !settingsOnly && <div className="ai-boundary"><Info size={16} /><span>Proposals use your request, application context, and any reviewed repository snapshots or browser observations you select. Discovery observations describe what the app showed; they do not establish the expected outcome.</span></div>}
+    {!repositorySearch && !settingsOnly && <details className="chat-source-settings" open={conversation ? undefined : true}><summary>Review source context</summary>
     <div className="ai-repository-section"><div className="ai-repository-heading"><div><div className="eyebrow">OPTIONAL SOURCE CONTEXT</div><h3>Review repository snapshots</h3><p>Select up to one frontend and one backend snapshot. The complete file contents will be sent with your request after consent.</p></div></div><SnapshotBrowser token={token} projectId={projectId} selected={snapshotIds} onSelectionChange={ids => { setSnapshotIds(ids); invalidateContext() }} /></div>
     <div className="ai-repository-section"><div className="ai-repository-heading"><div><div className="eyebrow">OPTIONAL BROWSER CONTEXT</div><h3>Review discovery observations</h3><p>Select one completed discovery. Observed text must be checked against your requirements before it becomes a test expectation.</p></div></div><DiscoveryBrowser token={token} projectId={projectId} selectedId={discoveryId} onSelectionChange={id => { setDiscoveryId(id); invalidateContext() }} /></div>
     </details>}
@@ -390,11 +440,11 @@ export default function AiProposals({ token, projectId, onClose, onReview, conve
             <details className="chat-model-settings" open={conversation ? undefined : true}><summary>AI connection <span>{recipient}{model ? ` · ${model}` : ''}</span></summary>
             {configError && <div className="error-banner">{configError}</div>}
             {!configured && <p>Connect an AI provider to draft new checks. You can still run approved checks.</p>}
-            <div className="ai-form-grid"><div className="ai-main-fields">{!conversation && <><label className="field-label" htmlFor="ai-request">Testing request <span>*</span></label><textarea id="ai-request" maxLength={4000} rows={4} placeholder="What business behaviour should be checked? What could go wrong?" value={prompt} onChange={event => { setPrompt(event.target.value); invalidateContext() }} /><div className="input-count">{prompt.length} / 4,000</div></>}{!repositorySearch && <><label className="field-label" htmlFor="ai-context">Application context <span className={selectedSources ? 'optional' : undefined}>{conversation ? 'optional' : selectedSources ? 'optional with reviewed context' : '*'}</span></label><textarea id="ai-context" maxLength={60000} rows={9} placeholder={'Paste requirements, known paths, fixture rules, and independent expected values. Observed app text and repository code alone may not reveal the intended business outcome.'} value={context} onChange={event => { setContext(event.target.value); invalidateContext() }} /><div className="input-count">{context.length.toLocaleString()} / 60,000</div></>}</div>
+            <div className="ai-form-grid"><div className="ai-main-fields">{!conversation && !settingsOnly && <><label className="field-label" htmlFor={fieldID("ai-request")}>Testing request <span>*</span></label><textarea id={fieldID("ai-request")} maxLength={4000} rows={4} placeholder="What business behaviour should be checked? What could go wrong?" value={prompt} onChange={event => { setPrompt(event.target.value); invalidateContext() }} /><div className="input-count">{prompt.length} / 4,000</div></>}{!repositorySearch && !settingsOnly && <><label className="field-label" htmlFor={fieldID("ai-context")}>Application context <span className={selectedSources ? 'optional' : undefined}>{conversation ? 'optional' : selectedSources ? 'optional with reviewed context' : '*'}</span></label><textarea id={fieldID("ai-context")} maxLength={60000} rows={9} placeholder={'Paste requirements, known paths, fixture rules, and independent expected values. Observed app text and repository code alone may not reveal the intended business outcome.'} value={context} onChange={event => { setContext(event.target.value); invalidateContext() }} /><div className="input-count">{context.length.toLocaleString()} / 60,000</div></>}</div>
               <div className="ai-settings">
                 <div className="ai-settings-heading"><KeyRound size={17} /><strong>Generation settings</strong></div>
-                <label className="field-label" htmlFor="ai-provider">Provider</label>
-                <select id="ai-provider" value={provider} onChange={event => changeProvider(event.target.value as AiProvider)}>{providers.map(item => <option key={item.provider} value={item.provider} disabled={!item.models.length && item.provider !== 'opencode-go' && !(item.provider === 'openai' && chatgpt?.enabled)}>{providerName(item.provider)}{!item.models.length && item.provider !== 'opencode-go' && !(item.provider === 'openai' && chatgpt?.enabled) ? ' (unavailable)' : ''}</option>)}</select>
+                <label className="field-label" htmlFor={fieldID("ai-provider")}>Provider</label>
+                <select id={fieldID("ai-provider")} value={provider} onChange={event => changeProvider(event.target.value as AiProvider)}>{providers.map(item => <option key={item.provider} value={item.provider} disabled={!item.models.length && item.provider !== 'opencode-go' && !(item.provider === 'openai' && chatgpt?.enabled)}>{providerName(item.provider)}{!item.models.length && item.provider !== 'opencode-go' && !(item.provider === 'openai' && chatgpt?.enabled) ? ' (unavailable)' : ''}</option>)}</select>
                 <div className="field-label ai-access-label">Access mode</div>
                 <div className="ai-mode-options">
                   {provider === 'opencode-go' && <label className="chosen"><input type="radio" name="credential-mode" value="opencode" checked readOnly /><span><strong>Go / Go Plus subscription</strong><small>Use the local OpenCode connection</small></span></label>}
@@ -405,7 +455,7 @@ export default function AiProposals({ token, projectId, onClose, onReview, conve
                 {credentialMode === 'opencode' && <OpenCodeConnection key={token} token={token} disabled={generating} onBusy={setOpenCodeBusy} onStatus={status => { invalidateContext(); setOpenCode(status); setModel('') }} />}
                 {credentialMode === 'chatgpt' && chatgpt?.enabled && <div className="ai-chatgpt">
                   <p>Use your ChatGPT plan for proposals. Connect in your browser to authorize requests from this local app; no API key is needed.</p>
-                  {chatgpt.profiles.length > 0 && <><label className="field-label" htmlFor="ai-chatgpt-account">Account</label><select id="ai-chatgpt-account" value={selectedProfileId} disabled={chatgptBusy || loginPending} onChange={event => { invalidateContext(); selectedProfileIdRef.current = event.target.value; setSelectedProfileId(event.target.value); setChatgptError(''); setChatgptNotice('') }}><option value="">Choose an account</option>{chatgpt.profiles.map(profile => <option key={profile.id} value={profile.id}>{accountName(profile)}{profile.connected ? '' : ' (disconnected)'}</option>)}</select></>}
+                  {chatgpt.profiles.length > 0 && <><label className="field-label" htmlFor={fieldID("ai-chatgpt-account")}>Account</label><select id={fieldID("ai-chatgpt-account")} value={selectedProfileId} disabled={chatgptBusy || loginPending} onChange={event => { invalidateContext(); selectedProfileIdRef.current = event.target.value; setSelectedProfileId(event.target.value); setChatgptError(''); setChatgptNotice('') }}><option value="">Choose an account</option>{chatgpt.profiles.map(profile => <option key={profile.id} value={profile.id}>{accountName(profile)}{profile.connected ? '' : ' (disconnected)'}</option>)}</select></>}
                   <div className="ai-chatgpt-actions">
                     {selectedProfile?.connected ? <><span className="ai-connected"><Check size={14} />Connected{selectedProfile.sharing ? '' : ' · sharing unavailable'}</span>{chatgpt.active_profile_id !== selectedProfile.id && selectedProfile.sharing && <button type="button" className="button" disabled={chatgptBusy || loginPending} onClick={() => void updateChatgpt('select', selectedProfile.id)}>Use this account</button>}<button type="button" className="button" disabled={chatgptBusy || loginPending} onClick={() => void connectChatgpt(selectedProfile.id)}>Reconnect account</button><button type="button" className="link-button" disabled={chatgptBusy || loginPending} onClick={() => void updateChatgpt('disconnect', selectedProfile.id)}>Disconnect</button></> : <button type="button" className="button" disabled={chatgptBusy || loginPending} onClick={() => void connectChatgpt(selectedProfile?.id)}>{selectedProfile ? 'Reconnect account' : 'Continue with ChatGPT'}</button>}
                     {chatgpt.profiles.length > 0 && <button type="button" className="link-button" disabled={chatgptBusy || loginPending} onClick={() => void connectChatgpt()}>Add another account</button>}
@@ -416,20 +466,20 @@ export default function AiProposals({ token, projectId, onClose, onReview, conve
                   {chatgptNotice && <p className="ai-chatgpt-notice">{chatgptNotice}</p>}
                   <a href="https://chatgpt.com/settings/usage" target="_blank" rel="noopener noreferrer">Manage usage <ExternalLink size={12} /></a>
                 </div>}
-                <label className="field-label" htmlFor="ai-model">Model</label>
-                <select id="ai-model" value={model} disabled={credentialMode === 'opencode' ? !openCode?.connected || openCodeBusy : credentialMode === 'chatgpt' && (!selectedProfile?.connected || !selectedProfile.sharing || chatgpt?.active_profile_id !== selectedProfileId || chatgptModelsLoading)} onChange={event => { invalidateContext(); setModel(event.target.value) }}>
+                <label className="field-label" htmlFor={fieldID("ai-model")}>Model</label>
+                <select id={fieldID("ai-model")} value={model} disabled={credentialMode === 'opencode' ? !openCode?.connected || openCodeBusy : credentialMode === 'chatgpt' && (!selectedProfile?.connected || !selectedProfile.sharing || chatgpt?.active_profile_id !== selectedProfileId || chatgptModelsLoading)} onChange={event => { invalidateContext(); setModel(event.target.value) }}>
                   {credentialMode === 'opencode' ? <><option value="">{openCodeBusy ? 'Loading models…' : 'Choose a Go model'}</option>{openCode?.models.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</> : credentialMode === 'chatgpt' ? <><option value="">{chatgptModelsLoading ? 'Loading models…' : 'Choose a model'}</option>{chatgptModels.map(item => <option key={item.slug} value={item.slug}>{item.display_name || item.slug}</option>)}</> : selectedProvider?.models.map(item => <option key={item} value={item}>{item}</option>)}
                 </select>
                 {credentialMode === 'chatgpt' && selectedProfile?.connected && !selectedProfile.sharing && <p className="ai-key-note">Reconnect this account to authorize sharing requests.</p>}
                 {credentialMode === 'chatgpt' && selectedProfile?.connected && selectedProfile.sharing && chatgpt?.active_profile_id !== selectedProfileId && <p className="ai-key-note">Choose “Use this account” to load its models.</p>}
                 {credentialMode === 'chatgpt' && selectedProfile?.connected && selectedProfile.sharing && chatgpt?.active_profile_id === selectedProfileId && !chatgptModelsLoading && chatgptModels.length === 0 && <p className="ai-key-note">No models are available for this account.</p>}
-                {credentialMode === 'byok' && <><label className="field-label" htmlFor="ai-provider-key">{recipient} API key</label><input id="ai-provider-key" type="password" autoComplete="off" placeholder="Enter key for this request" value={providerKey} onChange={event => { setProviderKey(event.target.value); invalidateContext() }} />{provider === 'anthropic' && <><label className="field-label" htmlFor="ai-workspace">Anthropic workspace ID <span className="optional">optional</span></label><input id="ai-workspace" type="text" autoComplete="off" placeholder="wrkspc_…" value={workspaceId} onChange={event => { setWorkspaceId(event.target.value); invalidateContext() }} /><p className="ai-workspace-note">Required for a key that is not scoped to one workspace.</p></>}<p className="ai-key-note"><LockKeyhole size={13} />Cleared on submit. Never stored in browser storage.</p></>}
+                {credentialMode === 'byok' && <><label className="field-label" htmlFor={fieldID("ai-provider-key")}>{recipient} API key</label><input id={fieldID("ai-provider-key")} type="password" autoComplete="off" placeholder="Enter key for this request" value={providerKey} onChange={event => { setProviderKey(event.target.value); invalidateContext() }} />{provider === 'anthropic' && <><label className="field-label" htmlFor={fieldID("ai-workspace")}>Anthropic workspace ID <span className="optional">optional</span></label><input id={fieldID("ai-workspace")} type="text" autoComplete="off" placeholder="wrkspc_…" value={workspaceId} onChange={event => { setWorkspaceId(event.target.value); invalidateContext() }} /><p className="ai-workspace-note">Required for a key that is not scoped to one workspace.</p></>}<p className="ai-key-note"><LockKeyhole size={13} />Cleared on submit. Never stored in browser storage.</p></>}
               </div></div></details>
-            {conversation && <div className="chat-message-field"><label className="field-label" htmlFor="ai-chat-message">Your message</label><textarea id="ai-chat-message" maxLength={4000} rows={3} placeholder="What would you like to test?" value={prompt} disabled={generating || conversation.disabled} onChange={event => { setPrompt(event.target.value); invalidateContext() }} /><small>Try “run all approved checks” or “rerun failed checks”. Those commands use existing checks without an AI call.</small></div>}
-            <label className="ai-consent"><input type="checkbox" checked={consent} onChange={event => setConsent(event.target.checked)} /><span>{repositorySearch ? `I agree to send my testing request and repository file names and sizes to ${recipient} to find relevant files. File contents and repository credentials are excluded from this AI request.` : conversation ? `I agree to send this message, up to eight recent drafting exchanges, application context, and any selected reviewed sources to ${recipient}. Messages and proposals are saved in this project; connection keys are excluded.` : selectedSources ? `I have reviewed the selected context and agree to send my testing request, application context, and ${selectedSources} to ${recipient} to generate proposals.` : `I agree to send my testing request and application context to ${recipient} to generate proposals.`}</span></label>
-            {requestError && <div className="error-banner"><AlertCircle size={17} /><span>{requestError}</span></div>}
-            <div className="ai-actions"><span><ShieldCheck size={16} />{repositorySearch ? 'Review imported files before sharing their contents with AI.' : conversation ? 'Drafts are saved in chat; review and approval are required before execution.' : 'Drafts remain unapproved and unsaved until you review them.'}</span>{generating ? <button className="button button-danger" type="button" onClick={cancel}><Square size={14} />Cancel request</button> : <button className="button button-primary" type="submit" disabled={!canGenerate}><Sparkles size={16} />{repositorySearch ? 'Find relevant files' : conversation ? command ? 'Send and run checks' : 'Send message' : 'Generate proposals'}</button>}</div>
+            {conversation && <div className="chat-message-field"><label className="field-label" htmlFor={fieldID("ai-chat-message")}>Your message</label><textarea id={fieldID("ai-chat-message")} maxLength={4000} rows={3} placeholder="What would you like to test?" value={prompt} disabled={generating || conversation.disabled} onChange={event => { setPrompt(event.target.value); invalidateContext() }} /><small>Try “run all approved checks” or “rerun failed checks”. Those commands use existing checks without an AI call.</small></div>}
+            {!settingsOnly && <label className="ai-consent"><input type="checkbox" checked={consent} onChange={event => setConsent(event.target.checked)} /><span>{repositorySearch ? `I agree to send my testing request and repository file names and sizes to ${recipient} to find relevant files. File contents and repository credentials are excluded from this AI request.` : conversation ? `I agree to send this message, up to eight recent drafting exchanges, application context, task browser observations, approved access steps and run results, and any selected reviewed sources to ${recipient}. Messages and proposals are saved in this project; connection keys are excluded.` : selectedSources ? `I have reviewed the selected context and agree to send my testing request, application context, and ${selectedSources} to ${recipient} to generate proposals.` : `I agree to send my testing request and application context to ${recipient} to generate proposals.`}</span></label>}
+            {conversation && !command && !configLoading && (!credentialReady || !chosenModelAvailable) && <p className="field-help">Open AI connection below to choose an available model and connect access before sending.</p>}{requestError && <div className="error-banner"><AlertCircle size={17} /><span>{requestError}</span></div>}
+            {!settingsOnly && <div className="ai-actions"><span><ShieldCheck size={16} />{repositorySearch ? 'Review imported files before sharing their contents with AI.' : conversation ? 'Drafts are saved in chat; review and approval are required before execution.' : 'Drafts remain unapproved and unsaved until you review them.'}</span>{generating ? <button className="button button-danger" type="button" onClick={cancel}><Square size={14} />Cancel request</button> : <button className="button button-primary" type="submit" disabled={!canGenerate}><Sparkles size={16} />{repositorySearch ? 'Find relevant files' : conversation ? command ? 'Send and run checks' : 'Send message' : 'Generate proposals'}</button>}</div>}
           </form>}
-    {!conversation && response && <div className="ai-results"><div className="ai-results-head"><div><div className="eyebrow">PROPOSAL REVIEW</div><h3>{response.scenarios.length ? `${response.scenarios.length} draft ${response.scenarios.length === 1 ? 'scenario' : 'scenarios'}` : 'More context needed'}</h3><p>Generated with {response.model}. Review assertions against your own requirements before saving.</p>{response.discovery_id && <p>Discovery source: <code>{response.discovery_id}</code></p>}{response.repository_snapshots && response.repository_snapshots.length > 0 && <p>Repository sources: {response.repository_snapshots.map(item => `${item.repository} (${item.role}, ${item.commit_sha.slice(0, 12)})`).join(" · ")}</p>}</div><span className="ai-provider-badge"><Sparkles size={14} />{(response.credential_mode ?? credentialMode) === 'chatgpt' ? 'Using ChatGPT plan' : providerName(response.provider)}</span></div><div className="ai-results-grid"><div className="ai-drafts">{response.scenarios.length ? response.scenarios.map((scenario, index) => <article className="ai-draft" key={`${index}-${scenario.name}`}><div className="ai-draft-label">DRAFT {String(index + 1).padStart(2, '0')} · UNAPPROVED</div><h4>{scenario.name}</h4>{scenario.description && <p>{scenario.description}</p>}<div className="expected"><span>PROPOSED OUTCOME</span><p>{scenario.expected_outcome}</p></div><div className="ai-draft-foot"><span>{scenario.steps.length} browser steps</span><button className="link-button" onClick={() => onReview({ ...scenario, approved: false })}>Review in editor <ArrowRight size={15} /></button></div></article>) : <div className="ai-no-drafts"><CircleHelp size={20} /><strong>No scenarios proposed</strong><p>The supplied context was not enough to form a check. Answer the questions, add more facts, and generate again.</p></div>}</div><aside className="ai-notes"><div className="ai-note-section"><h4><CircleHelp size={17} />Questions <span>{response.questions.length}</span></h4>{response.questions.length ? <ol>{response.questions.map((item, index) => <li key={index}>{item}</li>)}</ol> : <p>No open questions returned.</p>}</div><div className="ai-note-section"><h4><Info size={17} />Assumptions <span>{response.assumptions.length}</span></h4>{response.assumptions.length ? <ol>{response.assumptions.map((item, index) => <li key={index}>{item}</li>)}</ol> : <p>No assumptions returned.</p>}</div></aside></div><div className="ai-results-foot"><Check size={15} />Suggestions enter coverage only when you save them in the editor.<button type="button" onClick={() => { setResponse(null); setRequestError('') }}><RefreshCw size={14} />Start over</button></div></div>}
+    {!conversation && !settingsOnly && response && <div className="ai-results"><div className="ai-results-head"><div><div className="eyebrow">PROPOSAL REVIEW</div><h3>{response.scenarios.length ? `${response.scenarios.length} draft ${response.scenarios.length === 1 ? 'scenario' : 'scenarios'}` : 'More context needed'}</h3><p>Generated with {response.model}. Review assertions against your own requirements before saving.</p>{response.discovery_id && <p>Discovery source: <code>{response.discovery_id}</code></p>}{response.repository_snapshots && response.repository_snapshots.length > 0 && <p>Repository sources: {response.repository_snapshots.map(item => `${item.repository} (${item.role}, ${item.commit_sha.slice(0, 12)})`).join(" · ")}</p>}</div><span className="ai-provider-badge"><Sparkles size={14} />{(response.credential_mode ?? credentialMode) === 'chatgpt' ? 'Using ChatGPT plan' : providerName(response.provider)}</span></div><div className="ai-results-grid"><div className="ai-drafts">{response.scenarios.length ? response.scenarios.map((scenario, index) => <article className="ai-draft" key={`${index}-${scenario.name}`}><div className="ai-draft-label">DRAFT {String(index + 1).padStart(2, '0')} · UNAPPROVED</div><h4>{scenario.name}</h4>{scenario.description && <p>{scenario.description}</p>}<div className="expected"><span>PROPOSED OUTCOME</span><p>{scenario.expected_outcome}</p></div><div className="ai-draft-foot"><span>{scenario.steps.length} browser steps</span><button className="link-button" onClick={() => onReview({ ...scenario, approved: false })}>Review in editor <ArrowRight size={15} /></button></div></article>) : <div className="ai-no-drafts"><CircleHelp size={20} /><strong>No scenarios proposed</strong><p>The supplied context was not enough to form a check. Answer the questions, add more facts, and generate again.</p></div>}</div><aside className="ai-notes"><div className="ai-note-section"><h4><CircleHelp size={17} />Questions <span>{response.questions.length}</span></h4>{response.questions.length ? <ol>{response.questions.map((item, index) => <li key={index}>{item}</li>)}</ol> : <p>No open questions returned.</p>}</div><div className="ai-note-section"><h4><Info size={17} />Assumptions <span>{response.assumptions.length}</span></h4>{response.assumptions.length ? <ol>{response.assumptions.map((item, index) => <li key={index}>{item}</li>)}</ol> : <p>No assumptions returned.</p>}</div></aside></div><div className="ai-results-foot"><Check size={15} />Suggestions enter coverage only when you save them in the editor.<button type="button" onClick={() => { setResponse(null); setRequestError('') }}><RefreshCw size={14} />Start over</button></div></div>}
   </section>
 }

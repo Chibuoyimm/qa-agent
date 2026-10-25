@@ -24,6 +24,8 @@ export type Project = {
 }
 
 export type Scenario = ScenarioInput & {
+  journey_id?: string
+  task_id?: string
   id: string
   project_id: string
   created_at: string
@@ -35,7 +37,9 @@ export type RunMode = 'advisory' | 'blocking'
 export type Gate = 'pending' | 'pass' | 'warn' | 'fail'
 
 export type Artifact = { kind: 'screenshot' | 'video'; path: string }
+export type ExecutionStepResult = { index: number; action: StepAction; status: ResultStatus; duration_ms: number; message?: string; observed?: string }
 export type ScenarioResult = {
+  step_results?: ExecutionStepResult[]
   scenario_id: string
   status: ResultStatus
   message: string
@@ -44,6 +48,8 @@ export type ScenarioResult = {
 }
 
 export type Run = {
+  task_id?: string
+  source_run_id?: string
   id: string
   project_id: string
   base_url: string
@@ -295,6 +301,7 @@ export function validateScenario(input: unknown): ScenarioInput {
 }
 
 export type ChatTurn = {
+  task_id?: string
   id: string
   sequence: number
   project_id: string
@@ -315,3 +322,11 @@ export function chatRunCommand(prompt: string): ChatRunAction | null {
   if (['rerun failed checks', 'rerun the failed checks', 'rerun failures', 'rerun failed tests'].includes(text)) return 'rerun_failed'
   return null
 }
+
+export type Journey = { id: string; project_id: string; name: string; created_at: string }
+export type TaskApproval = { turn_id: string; scenario_ids: string[] }
+export type TestingTask = { id: string; project_id: string; journey_id: string; title: string; request: string; discovery_id?: string; created_at: string; approvals: TaskApproval[] }
+export type CoverageCheck = { scenario: Scenario; result: ScenarioResult; run_id: string; base_url: string; finished_at: string }
+export type CoverageData = { journeys: Journey[]; checks: CoverageCheck[]; scenarios: Scenario[] }
+export type FindingReview = { scenario_id: string; status: string; owner: string; reason: string; updated_at?: string }
+export const newRequestID = () => crypto.randomUUID().replaceAll('-', '')

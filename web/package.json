@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "test": "node --import ../worker/node_modules/tsx/dist/loader.mjs --test src/workspace.test.ts"
   },
   "dependencies": {
     "lucide-react": "^0.468.0",
