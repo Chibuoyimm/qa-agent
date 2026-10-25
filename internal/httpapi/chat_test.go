@@ -109,6 +109,9 @@ func verifyChatHTTP(t *testing.T, store *qa.Store) {
 	if err != nil || len(page.Turns) != 3 || page.Turns[2].Status != "error" {
 		t.Fatalf("failed turn remained pending: %+v %v", page, err)
 	}
+	if failure := page.Turns[2].Failure; failure == nil || failure.Code != "usage_limit" || failure.Retryable {
+		t.Fatalf("usage-limit cause was not retained: %+v", failure)
+	}
 	cancelledContext, cancel := context.WithCancel(ctx)
 	cancelling, err := planner.New("fixture", "", transportFunc(func(r *http.Request) (*http.Response, error) {
 		cancel()
@@ -126,6 +129,47 @@ func verifyChatHTTP(t *testing.T, store *qa.Store) {
 	page, err = store.ListChat(ctx, project.ID, 0)
 	if err != nil || len(page.Turns) != 4 || page.Turns[3].Status != "error" {
 		t.Fatalf("cancellation failed to close turn: %+v %v", page, err)
+	}
+	if failure := page.Turns[3].Failure; failure == nil || failure.Code != "interrupted" || !failure.Retryable {
+		t.Fatalf("interruption cause was not retained: %+v", failure)
+	}
+
+	// Replaying a failed request preserves its cause and does not call the provider again.
+	handler = httpapi.New(store, p, repository.New(nil), "operator", "worker", slog.New(slog.NewTextHandler(io.Discard, nil))).Handler()
+	response = request("POST", path, "operator", strings.Replace(first, "11111111111111111111111111111111", "33333333333333333333333333333333", 1), true)
+	if response.Code != 200 || calls != 2 || !strings.Contains(response.Body.String(), "usage_limit") {
+		t.Fatalf("failure replay lost its cause or retried inference: %d calls %d", response.Code, calls)
+	}
+	response = request("POST", path, "operator", strings.Replace(first, "11111111111111111111111111111111", "55555555555555555555555555555555", 1), true)
+	if response.Code != 200 || calls != 3 {
+		t.Fatalf("an explicit new request could not recover: %d %s", response.Code, response.Body.String())
+	}
+
+	invalid, err := planner.New("fixture", "", transportFunc(func(*http.Request) (*http.Response, error) {
+		output := `{"scenarios":[{"name":"Login","description":"","expected_outcome":"Page opens","steps":[{"action":"navigate","path":"/{{private_secret_marker}}"},{"action":"assert_visible","test_id":"ready"}]}],"questions":[],"assumptions":[]}`
+		text, _ := json.Marshal(output)
+		body := `{"status":"completed","output":[{"type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":` + string(text) + `}]}]}`
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body))}, nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler = httpapi.New(store, invalid, repository.New(nil), "operator", "worker", slog.New(slog.NewTextHandler(io.Discard, nil))).Handler()
+	response = request("POST", path, "operator", strings.Replace(first, "11111111111111111111111111111111", "66666666666666666666666666666666", 1), true)
+	if response.Code != 502 {
+		t.Fatalf("invalid plan: %d %s", response.Code, response.Body.String())
+	}
+	page, err = store.ListChat(ctx, project.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := page.Turns[len(page.Turns)-1]
+	if last.Failure == nil || last.Failure.Code != "invalid_plan" || !last.Failure.Retryable || !strings.Contains(last.Failure.Detail, "unknown identifier") || last.Proposal != nil || last.RunID != "" {
+		t.Fatalf("invalid plan cause missing or unsafe plan saved: %+v", last)
+	}
+	encoded, _ := json.Marshal(page)
+	if strings.Contains(string(encoded), "private_secret_marker") || strings.Contains(string(encoded), "transient-fixture-key") {
+		t.Fatal("saved diagnostics leaked model output or provider credentials")
 	}
 
 	runs, err := store.ListRuns(ctx, project.ID)

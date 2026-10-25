@@ -104,7 +104,7 @@ func validateBindings(steps []Step) error {
 		for _, value := range values {
 			for _, match := range bindingToken.FindAllStringSubmatch(value, -1) {
 				if !known[match[1]] {
-					return fmt.Errorf("step %d references unknown binding %s", i+1, match[1])
+					return fmt.Errorf("step %d references an unknown identifier", i+1)
 				}
 			}
 			stripped := bindingToken.ReplaceAllString(value, "")

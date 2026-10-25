@@ -123,6 +123,9 @@ func TestChatPendingRecoveryAndHistoryPaging(t *testing.T) {
 	if err != nil || page.Turns[0].Status != "error" {
 		t.Fatalf("interrupted recovery: %+v %v", page, err)
 	}
+	if page.Turns[0].Failure == nil || page.Turns[0].Failure.Code != "interrupted" || !page.Turns[0].Failure.Retryable {
+		t.Fatal("stale planning request lost its recovery action")
+	}
 	if _, err := store.FinishChat(ctx, project.ID, turn.ID, "late", &qa.Proposal{}); !errors.Is(err, qa.ErrConflict) {
 		t.Fatalf("late inference overwrote interrupted request: %v", err)
 	}

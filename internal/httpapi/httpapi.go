@@ -224,6 +224,9 @@ func (a *API) fail(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusServiceUnavailable, err.Error())
 	case errors.Is(err, planner.ErrFileSelection):
 		writeError(w, http.StatusBadGateway, "AI file selection was invalid or exceeded 20 files / 40,000 bytes. Narrow the testing request or choose files manually.")
+	case errors.Is(err, planner.ErrInvalidPlan), errors.Is(err, planner.ErrIncompleteResponse), errors.Is(err, planner.ErrInvalidResponse), errors.Is(err, planner.ErrResponseLimit):
+		_, message := planningFailure(err)
+		writeError(w, http.StatusBadGateway, message)
 	case errors.Is(err, planner.ErrUpstream):
 		writeError(w, http.StatusBadGateway, "proposal provider failed or returned invalid output")
 	case errors.Is(err, repository.ErrInvalid):

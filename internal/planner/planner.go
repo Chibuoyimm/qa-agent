@@ -29,6 +29,10 @@ var (
 	ErrUnavailable             = errors.New("proposal access is not configured")
 	ErrBusy                    = errors.New("proposal generation is busy")
 	ErrUpstream                = errors.New("proposal provider failed or returned invalid output")
+	ErrInvalidPlan             = fmt.Errorf("%w: invalid test plan", ErrUpstream)
+	ErrIncompleteResponse      = fmt.Errorf("%w: incomplete response", ErrUpstream)
+	ErrInvalidResponse         = fmt.Errorf("%w: invalid response format", ErrUpstream)
+	ErrResponseLimit           = fmt.Errorf("%w: response exceeded its size limit", ErrUpstream)
 	ErrTimeout                 = errors.New("proposal provider timed out")
 	ErrSubscriptionDenied      = errors.New("ChatGPT plan access denied")
 	ErrSubscriptionUnavailable = errors.New("ChatGPT plan availability could not be checked")
@@ -355,17 +359,17 @@ func (p *Planner) Propose(ctx context.Context, in Input, byokKey string) (Result
 	dec.DisallowUnknownFields()
 	var proposed proposalOutput
 	if err := dec.Decode(&proposed); err != nil {
-		return Result{}, ErrUpstream
+		return Result{}, fmt.Errorf("%w: JSON contract", ErrInvalidPlan)
 	}
 	var trailing struct{}
 	if err := dec.Decode(&trailing); err != io.EOF {
-		return Result{}, ErrUpstream
+		return Result{}, fmt.Errorf("%w: trailing content", ErrInvalidPlan)
 	}
 	if len(proposed.Scenarios) > 10 || len(proposed.Questions) > 20 || len(proposed.Assumptions) > 20 || proposed.Scenarios == nil || proposed.Questions == nil || proposed.Assumptions == nil {
-		return Result{}, ErrUpstream
+		return Result{}, fmt.Errorf("%w: missing or excessive plan sections", ErrInvalidPlan)
 	}
 	if len(proposed.Scenarios) == 0 && len(proposed.Questions) == 0 {
-		return Result{}, ErrUpstream
+		return Result{}, fmt.Errorf("%w: no checks or questions", ErrInvalidPlan)
 	}
 	for i := range proposed.Scenarios {
 		fixture := ""
@@ -375,22 +379,22 @@ func (p *Planner) Propose(ctx context.Context, in Input, byokKey string) (Result
 			}
 		}
 		if fixture != in.FixtureID {
-			return Result{}, ErrUpstream
+			return Result{}, fmt.Errorf("%w: selected fixture mismatch", ErrInvalidPlan)
 		}
 		if in.Journey && (!qa.IsJourney(proposed.Scenarios[i].Steps) || len(proposed.Scenarios) != 1) {
-			return Result{}, ErrUpstream
+			return Result{}, fmt.Errorf("%w: complete journey must be one ordered check", ErrInvalidPlan)
 		}
 		proposed.Scenarios[i].Approved = true
 		validated, err := qa.ValidateScenario(proposed.Scenarios[i])
 		if err != nil {
-			return Result{}, ErrUpstream
+			return Result{}, fmt.Errorf("%w: scenario %d: %v", ErrInvalidPlan, i+1, err)
 		}
 		validated.Approved = false
 		proposed.Scenarios[i] = validated
 	}
 	for _, line := range append(append([]string{}, proposed.Questions...), proposed.Assumptions...) {
 		if strings.TrimSpace(line) == "" || len(line) > 4000 {
-			return Result{}, ErrUpstream
+			return Result{}, fmt.Errorf("%w: question or assumption exceeds its bounds", ErrInvalidPlan)
 		}
 	}
 	hash := sha256.Sum256([]byte(in.Context))
@@ -404,25 +408,25 @@ func openAIOutput(provider providerResponse) (string, error) {
 			continue
 		}
 		if item.Type != "message" || item.Role != "assistant" || len(item.Content) != 1 {
-			return "", ErrUpstream
+			return "", ErrInvalidResponse
 		}
 		if item.Status != "completed" {
-			return "", ErrUpstream
+			return "", ErrInvalidResponse
 		}
 		for _, content := range item.Content {
 			if content.Type != "output_text" || content.Refusal != "" || content.Text == "" {
-				return "", ErrUpstream
+				return "", ErrInvalidResponse
 			}
 			if content.Type == "output_text" {
 				if outputText != "" {
-					return "", ErrUpstream
+					return "", ErrInvalidResponse
 				}
 				outputText = content.Text
 			}
 		}
 	}
 	if outputText == "" {
-		return "", ErrUpstream
+		return "", ErrInvalidResponse
 	}
 	return outputText, nil
 }

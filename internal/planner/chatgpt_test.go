@@ -34,17 +34,17 @@ func TestSubscriptionStreamBoundaries(t *testing.T) {
 	}{
 		{"completed after delta", delta + completed, nil},
 		{"completed", completed, nil},
-		{"partial text without completed", delta, ErrUpstream},
-		{"missing terminal delimiter", strings.TrimSuffix(completed, "\n\n"), ErrUpstream},
-		{"incomplete", "data: {\"type\":\"response.incomplete\",\"response\":{\"status\":\"incomplete\"}}\n\n", ErrUpstream},
+		{"partial text without completed", delta, ErrIncompleteResponse},
+		{"missing terminal delimiter", strings.TrimSuffix(completed, "\n\n"), ErrIncompleteResponse},
+		{"incomplete", "data: {\"type\":\"response.incomplete\",\"response\":{\"status\":\"incomplete\"}}\n\n", ErrIncompleteResponse},
 		{"usage limit after text", delta + "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"subscription_sharing_usage_limit_exceeded\"}}}\n\n", chatgpt.ErrUsageLimit},
 		{"unavailable", "data: {\"type\":\"error\",\"code\":\"subscription_sharing_usage_unavailable\"}\n\n", ErrSubscriptionUnavailable},
-		{"malformed", "data: broken\n\n", ErrUpstream},
+		{"malformed", "data: broken\n\n", ErrInvalidResponse},
 		{"mismatched event", strings.Replace(completed, "event: response.completed", "event: response.failed", 1), ErrUpstream},
 		{"wrong terminal status", strings.Replace(completed, "\"status\":\"completed\"", "\"status\":\"incomplete\"", 1), ErrUpstream},
-		{"oversized event", "data: " + strings.Repeat("x", 2<<20) + "\n\n" + completed, ErrUpstream},
+		{"oversized event", "data: " + strings.Repeat("x", 2<<20) + "\n\n" + completed, ErrResponseLimit},
 		{"long journey stream", strings.Repeat(": heartbeat\n\n", 180000) + completed, nil},
-		{"oversized stream", strings.Repeat(": heartbeat\n\n", 700000) + completed, ErrUpstream},
+		{"oversized stream", strings.Repeat(": heartbeat\n\n", 700000) + completed, ErrResponseLimit},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			result, err := readSubscriptionStream(strings.NewReader(tc.body))

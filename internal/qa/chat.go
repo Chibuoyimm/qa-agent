@@ -27,16 +27,24 @@ type Proposal struct {
 }
 
 type ChatTurn struct {
-	TaskID    string    `json:"task_id,omitempty"`
-	ID        string    `json:"id"`
-	Sequence  int64     `json:"sequence"`
-	ProjectID string    `json:"project_id"`
-	Prompt    string    `json:"prompt"`
-	Status    string    `json:"status"`
-	Reply     string    `json:"reply"`
-	Proposal  *Proposal `json:"proposal,omitempty"`
-	RunID     string    `json:"run_id,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
+	TaskID    string           `json:"task_id,omitempty"`
+	ID        string           `json:"id"`
+	Sequence  int64            `json:"sequence"`
+	ProjectID string           `json:"project_id"`
+	Prompt    string           `json:"prompt"`
+	Status    string           `json:"status"`
+	Reply     string           `json:"reply"`
+	Proposal  *Proposal        `json:"proposal,omitempty"`
+	Failure   *PlanningFailure `json:"failure,omitempty"`
+	RunID     string           `json:"run_id,omitempty"`
+	CreatedAt time.Time        `json:"created_at"`
+}
+
+// Failure metadata contains only an allowlisted cause, never provider output or request context.
+type PlanningFailure struct {
+	Code      string `json:"code"`
+	Retryable bool   `json:"retryable"`
+	Detail    string `json:"detail,omitempty"`
 }
 
 type ChatPage struct {
@@ -44,17 +52,22 @@ type ChatPage struct {
 	HasOlder bool       `json:"has_older"`
 }
 
-const chatColumns = `id,sequence,project_id,prompt,status,reply,proposal,COALESCE(run_id,''),created_at,COALESCE(task_id,'')`
+const chatColumns = `id,sequence,project_id,prompt,status,reply,proposal,COALESCE(run_id,''),created_at,COALESCE(task_id,''),failure`
 
 func scanChatTurn(row rowScanner) (ChatTurn, error) {
 	var turn ChatTurn
-	var raw []byte
-	err := row.Scan(&turn.ID, &turn.Sequence, &turn.ProjectID, &turn.Prompt, &turn.Status, &turn.Reply, &raw, &turn.RunID, &turn.CreatedAt, &turn.TaskID)
+	var raw, failure []byte
+	err := row.Scan(&turn.ID, &turn.Sequence, &turn.ProjectID, &turn.Prompt, &turn.Status, &turn.Reply, &raw, &turn.RunID, &turn.CreatedAt, &turn.TaskID, &failure)
 	if err != nil {
 		return ChatTurn{}, err
 	}
 	if raw != nil {
 		if err := json.Unmarshal(raw, &turn.Proposal); err != nil {
+			return ChatTurn{}, err
+		}
+	}
+	if failure != nil {
+		if err := json.Unmarshal(failure, &turn.Failure); err != nil {
 			return ChatTurn{}, err
 		}
 	}
@@ -71,7 +84,7 @@ func ValidateChatRequest(id, prompt string) error {
 	return nil
 }
 
-const interruptedChatReply = "This request was interrupted or failed. No checks were run. Send a new message to try again."
+const interruptedChatReply = "Planning was interrupted. No checks were run. Review your saved request and try again."
 
 func (s *Store) ListChat(ctx context.Context, projectID string, before int64) (ChatPage, error) {
 	return s.ListTaskChat(ctx, projectID, "", before)
@@ -81,7 +94,7 @@ func (s *Store) ListTaskChat(ctx context.Context, projectID, taskID string, befo
 	if _, err := s.GetProject(ctx, projectID); err != nil {
 		return ChatPage{}, err
 	}
-	if _, err := s.db.Exec(ctx, `UPDATE chat_turns SET status='error',reply=$2 WHERE project_id=$1 AND status='pending' AND created_at < clock_timestamp()-interval '390 seconds'`, projectID, interruptedChatReply); err != nil {
+	if _, err := s.db.Exec(ctx, `UPDATE chat_turns SET status='error',reply=$2,failure='{"code":"interrupted","retryable":true}'::jsonb WHERE project_id=$1 AND status='pending' AND created_at < clock_timestamp()-interval '390 seconds'`, projectID, interruptedChatReply); err != nil {
 		return ChatPage{}, err
 	}
 	rows, err := s.db.Query(ctx, `SELECT `+chatColumns+` FROM chat_turns WHERE project_id=$1 AND ($2::bigint=0 OR sequence<$2) AND ($3='' OR task_id=$3) ORDER BY sequence DESC LIMIT 21`, projectID, before, taskID)
@@ -147,7 +160,7 @@ func (s *Store) BeginTaskChat(ctx context.Context, projectID, taskID, id, prompt
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return ChatTurn{}, false, err
 	}
-	if _, err := tx.Exec(ctx, `UPDATE chat_turns SET status='error',reply=$2 WHERE project_id=$1 AND status='pending' AND created_at < clock_timestamp()-interval '390 seconds'`, projectID, interruptedChatReply); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE chat_turns SET status='error',reply=$2,failure='{"code":"interrupted","retryable":true}'::jsonb WHERE project_id=$1 AND status='pending' AND created_at < clock_timestamp()-interval '390 seconds'`, projectID, interruptedChatReply); err != nil {
 		return ChatTurn{}, false, err
 	}
 	var busy bool
@@ -183,6 +196,18 @@ func (s *Store) FinishChat(ctx context.Context, projectID, id, reply string, pro
 		}
 	}
 	turn, err := scanChatTurn(s.db.QueryRow(ctx, `UPDATE chat_turns SET status=$3,reply=$4,proposal=$5 WHERE project_id=$1 AND id=$2 AND status='pending' RETURNING `+chatColumns, projectID, id, status, reply, raw))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ChatTurn{}, ErrConflict
+	}
+	return turn, err
+}
+
+func (s *Store) FailChat(ctx context.Context, projectID, id, reply string, failure PlanningFailure) (ChatTurn, error) {
+	raw, err := json.Marshal(failure)
+	if err != nil {
+		return ChatTurn{}, err
+	}
+	turn, err := scanChatTurn(s.db.QueryRow(ctx, `UPDATE chat_turns SET status='error',reply=$3,failure=$4 WHERE project_id=$1 AND id=$2 AND status='pending' RETURNING `+chatColumns, projectID, id, reply, raw))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ChatTurn{}, ErrConflict
 	}

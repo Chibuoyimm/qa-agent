@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -88,7 +89,7 @@ func (p *Planner) streamSubscription(ctx context.Context, in Input, key string, 
 		return providerResponse{}, subscriptionFailure(failure.Error.Code, response.StatusCode)
 	}
 	if contentType := strings.Split(response.Header.Get("Content-Type"), ";")[0]; contentType != "" && contentType != "text/event-stream" {
-		return providerResponse{}, ErrUpstream
+		return providerResponse{}, ErrInvalidResponse
 	}
 	return readSubscriptionStream(response.Body)
 }
@@ -149,49 +150,49 @@ func readSubscriptionStream(body io.Reader) (providerResponse, error) {
 			} `json:"response"`
 		}
 		if json.Unmarshal([]byte(data.String()), &event) != nil || event.Type == "" || (eventName != "" && eventName != event.Type) {
-			return providerResponse{}, false, ErrUpstream
+			return providerResponse{}, false, ErrInvalidResponse
 		}
 		data.Reset()
 		eventName = ""
 		switch event.Type {
 		case "response.created":
 			if responseID != "" || len(items) != 0 {
-				return providerResponse{}, false, ErrUpstream
+				return providerResponse{}, false, ErrInvalidResponse
 			}
 			responseID = event.Response.ID
 		case "response.output_item.done":
 			if event.OutputIndex == nil || *event.OutputIndex != len(items) || len(items) >= 16 || event.Item.ID == "" || (event.Item.Type != "message" && event.Item.Type != "reasoning") {
-				return providerResponse{}, false, ErrUpstream
+				return providerResponse{}, false, ErrInvalidResponse
 			}
 			for _, item := range items {
 				if item.ID == event.Item.ID {
-					return providerResponse{}, false, ErrUpstream
+					return providerResponse{}, false, ErrInvalidResponse
 				}
 			}
 			items = append(items, event.Item)
 		case "response.completed":
 			if event.Response.Status != "completed" || (responseID != "" && event.Response.ID != responseID) {
-				return providerResponse{}, false, ErrUpstream
+				return providerResponse{}, false, ErrInvalidResponse
 			}
 			if len(event.Response.Output) == 0 {
 				// The plan route can leave terminal output empty. Only finished
 				// items from this response may supply it; deltas never do.
 				if responseID == "" || len(items) == 0 {
-					return providerResponse{}, false, ErrUpstream
+					return providerResponse{}, false, ErrInvalidResponse
 				}
 				event.Response.Output = items
 			} else if len(items) > 0 {
 				if len(items) != len(event.Response.Output) {
-					return providerResponse{}, false, ErrUpstream
+					return providerResponse{}, false, ErrInvalidResponse
 				}
 				for i, item := range items {
 					final := event.Response.Output[i]
 					if item.ID != final.ID || item.Type != final.Type || item.Role != final.Role || item.Status != final.Status || len(item.Content) != len(final.Content) {
-						return providerResponse{}, false, ErrUpstream
+						return providerResponse{}, false, ErrInvalidResponse
 					}
 					for j, content := range item.Content {
 						if content != final.Content[j] {
-							return providerResponse{}, false, ErrUpstream
+							return providerResponse{}, false, ErrInvalidResponse
 						}
 					}
 				}
@@ -205,13 +206,17 @@ func readSubscriptionStream(body io.Reader) (providerResponse, error) {
 			if code == "" {
 				code = event.Response.Error.Code
 			}
-			return providerResponse{}, false, subscriptionFailure(code, 0)
+			failure := subscriptionFailure(code, 0)
+			if event.Type == "response.incomplete" && errors.Is(failure, ErrUpstream) {
+				failure = ErrIncompleteResponse
+			}
+			return providerResponse{}, false, failure
 		}
 		return providerResponse{}, false, nil
 	}
 	for scanner.Scan() {
 		if limited.N <= 0 {
-			return providerResponse{}, ErrUpstream
+			return providerResponse{}, ErrResponseLimit
 		}
 		line := scanner.Text()
 		if line == "" {
@@ -227,10 +232,16 @@ func readSubscriptionStream(body io.Reader) (providerResponse, error) {
 				data.WriteByte('\n')
 			}
 			data.WriteString(strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " "))
+			if data.Len() > 2<<20 {
+				return providerResponse{}, ErrResponseLimit
+			}
 		} else if strings.HasPrefix(line, "event:") {
 			eventName = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
 		}
 	}
-	// A successful response requires a complete terminal event, including its frame delimiter.
-	return providerResponse{}, ErrUpstream
+	if limited.N <= 0 || errors.Is(scanner.Err(), bufio.ErrTooLong) {
+		return providerResponse{}, ErrResponseLimit
+	}
+	// Deltas, an EOF, or a broken connection cannot be accepted as a finished plan.
+	return providerResponse{}, ErrIncompleteResponse
 }

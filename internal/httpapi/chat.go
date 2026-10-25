@@ -125,6 +125,7 @@ func (a *API) chatProposal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	finished := false
+	var planningErr error = context.Canceled
 	defer func() {
 		if finished {
 			return
@@ -132,26 +133,32 @@ func (a *API) chatProposal(w http.ResponseWriter, r *http.Request) {
 		// Cancellation must still close the persisted pending turn; no inference is retried.
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
 		defer cancel()
-		if _, err := a.store.FinishChat(ctx, projectID, request.RequestID, "This request was interrupted or failed. No checks were run. Send a new message to try again.", nil); err != nil {
+		failure, reply := planningFailure(planningErr)
+		a.logger.Warn("planning failed", "project_id", projectID, "request_id", request.RequestID, "failure_code", failure.Code, "detail", failure.Detail)
+		if _, err := a.store.FailChat(ctx, projectID, request.RequestID, reply, failure); err != nil {
 			a.logger.Error("close interrupted chat request", "error", err)
 		}
 	}()
 	page, err := a.store.ListTaskChat(r.Context(), projectID, taskID, 0)
 	if err != nil {
+		planningErr = err
 		a.fail(w, err)
 		return
 	}
 	in.Context, err = chatContext(in.Context, page.Turns)
 	if err != nil {
+		planningErr = err
 		a.fail(w, err)
 		return
 	}
 	if err := a.planner.Validate(in, key); err != nil {
+		planningErr = err
 		a.fail(w, err)
 		return
 	}
 	result, err := a.planner.Propose(r.Context(), in, key)
 	if err != nil {
+		planningErr = err
 		a.fail(w, err)
 		return
 	}
@@ -167,6 +174,7 @@ func (a *API) chatProposal(w http.ResponseWriter, r *http.Request) {
 	}
 	turn, err = a.store.FinishChat(r.Context(), projectID, turn.ID, reply, &result)
 	if err != nil {
+		planningErr = err
 		a.fail(w, err)
 		return
 	}
