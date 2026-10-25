@@ -365,7 +365,7 @@ try {
     await page.getByRole('button',{name:'Run all approved checks',exact:true}).click();
     await page.getByText('1 passed · 0 failed · 0 unverified · 0 unfinished',{exact:true}).waitFor({timeout:90000});
     await page.getByRole('button',{name:'Open results and evidence',exact:true}).click();
-    await page.getByRole('heading',{name:'1 checks · passed',exact:true}).waitFor();
+    await page.getByRole('heading',{name:'1 check · passed',exact:true}).waitFor();
     await page.screenshot({ path: resolve(evidence, 'workspace-desktop.png'), fullPage: true });
     await page.setViewportSize({ width: 390, height: 844 });
     await page.screenshot({ path: resolve(evidence, 'workspace-mobile.png'), fullPage: true });
