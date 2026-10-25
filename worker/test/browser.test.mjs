@@ -88,6 +88,9 @@ test('all approved sample journeys pass against the healthy fixture', async () =
   for (const [index, scenario] of scenarios.entries()) {
     const result = await executeScenario(browser, { id: 'healthy', base_url: `${base}/` }, { ...scenario, id: `scenario-${index}` }, new Set([base]), artifacts, new AbortController().signal);
     assert.equal(result.status, 'passed', `${scenario.name}: ${result.message}`);
+    assert.equal(result.step_results.length, scenario.steps.length);
+    assert.ok(result.step_results.every((step, index) => step.index === index && step.status === 'passed' && step.action === scenario.steps[index].action));
+    assert.ok(!JSON.stringify(result.step_results).includes('pass1234'), 'step records must not contain fill secrets');
     assert.deepEqual(result.artifacts.map(a => a.kind).sort(), ['screenshot', 'video']);
     for (const artifact of result.artifacts) {
       assert.ok(!artifact.path.startsWith('/'));
@@ -98,9 +101,14 @@ test('all approved sample journeys pass against the healthy fixture', async () =
 });
 
 test('wrong revenue fails even when UI and sample API agree', async () => {
-  const result = await executeScenario(browser, { id: 'faulty', base_url: `${faultyBase}/` }, { ...scenarios[0], id: 'revenue' }, new Set([faultyBase]), artifacts, new AbortController().signal);
+  const result = await executeScenario(browser, { id: 'faulty', base_url: `${faultyBase}/` }, { ...scenarios[0], id: 'revenue', steps: [...scenarios[0].steps, {action: 'assert_visible', test_id: 'should-not-be-reached'}] }, new Set([faultyBase]), artifacts, new AbortController().signal);
   assert.equal(result.status, 'failed');
   assert.match(result.message, /approved expected value/);
+  const failed = result.step_results.at(-1);
+  assert.equal(failed.status, 'failed');
+  assert.equal(failed.action, 'assert_text');
+  assert.equal(failed.observed, '230000');
+  assert.equal(result.step_results.length, scenarios[0].steps.length, 'the appended unreachable step must not be reported as executed');
 });
 
 test('missing referenced secret blocks without disclosing a value', async () => {

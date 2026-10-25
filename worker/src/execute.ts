@@ -2,12 +2,12 @@ import { mkdir, rename } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';
 import type { Browser, BrowserContext, Page } from 'playwright';
 import { openGuardedPage } from './browser-context.js';
-import { safePart, validateBaseUrl, type Artifact, type Run, type Scenario, type ScenarioResult } from './contract.js';
+import { safePart, validateBaseUrl, type Artifact, type Run, type Scenario, type ScenarioResult, type ExecutionStepResult } from './contract.js';
 
 const STEP_TIMEOUT_MS = 8000;
 const SCENARIO_TIMEOUT_MS = 60000;
 
-class AssertionFailure extends Error {}
+class AssertionFailure extends Error { constructor(message: string, readonly observed = '') { super(message); } }
 class MissingSecret extends Error {}
 
 function artifactPath(root: string, file: string): string {
@@ -21,38 +21,51 @@ async function assertText(page: Page, testId: string, expected: string): Promise
   try { await locator.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS }); }
   catch { throw new AssertionFailure('Expected element was not visible'); }
   const deadline = Date.now() + STEP_TIMEOUT_MS;
+  let observed = "";
   while (Date.now() < deadline) {
     try {
-      if (await locator.innerText({ timeout: 1000 }) === expected) return;
+      observed = await locator.innerText({ timeout: 1000 });
+      if (observed === expected) return;
     } catch { /* A transient rerender may replace the element. */ }
     await page.waitForTimeout(100);
   }
-  throw new AssertionFailure('Text did not match the approved expected value');
+  throw new AssertionFailure('Text did not match the approved expected value', observed.slice(0, 1000));
 }
 
-export async function executeSteps(page: Page, scenario: Scenario, base: URL, signal: AbortSignal): Promise<void> {
-  for (const step of scenario.steps) {
-    if (signal.aborted) throw new Error('Execution interrupted');
-    switch (step.action) {
-      case 'navigate':
-        await page.goto(new URL(step.path!, base).href, { waitUntil: 'domcontentloaded', timeout: STEP_TIMEOUT_MS });
-        break;
-      case 'fill': {
-        const value = step.secret_env ? process.env[step.secret_env] : step.value;
-        if (step.secret_env && !value) throw new MissingSecret('Referenced test secret is unavailable');
-        await page.getByTestId(step.test_id!).fill(value ?? '', { timeout: STEP_TIMEOUT_MS });
-        break;
+export async function executeSteps(page: Page, scenario: Scenario, base: URL, signal: AbortSignal, results: ExecutionStepResult[] = []): Promise<void> {
+  for (const [index, step] of scenario.steps.entries()) {
+    const started = Date.now();
+    try {
+      if (signal.aborted) throw new Error('Execution interrupted');
+      switch (step.action) {
+        case 'navigate':
+          await page.goto(new URL(step.path!, base).href, { waitUntil: 'domcontentloaded', timeout: STEP_TIMEOUT_MS });
+          break;
+        case 'fill': {
+          const value = step.secret_env ? process.env[step.secret_env] : step.value;
+          if (step.secret_env && !value) throw new MissingSecret('Referenced test secret is unavailable');
+          await page.getByTestId(step.test_id!).fill(value ?? '', { timeout: STEP_TIMEOUT_MS });
+          break;
+        }
+        case 'click':
+          await page.getByTestId(step.test_id!).click({ timeout: STEP_TIMEOUT_MS });
+          break;
+        case 'assert_visible':
+          try { await page.getByTestId(step.test_id!).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS }); }
+          catch { throw new AssertionFailure('Expected element was not visible'); }
+          break;
+        case 'assert_text':
+          await assertText(page, step.test_id!, step.value!);
+          break;
       }
-      case 'click':
-        await page.getByTestId(step.test_id!).click({ timeout: STEP_TIMEOUT_MS });
-        break;
-      case 'assert_visible':
-        try { await page.getByTestId(step.test_id!).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS }); }
-        catch { throw new AssertionFailure('Expected element was not visible'); }
-        break;
-      case 'assert_text':
-        await assertText(page, step.test_id!, step.value!);
-        break;
+      results.push({ index, action: step.action, status: 'passed', duration_ms: Date.now() - started });
+    } catch (error) {
+      results.push({ index, action: step.action,
+        status: error instanceof MissingSecret ? 'blocked' : error instanceof AssertionFailure ? 'failed' : 'error',
+        duration_ms: Date.now() - started,
+        message: error instanceof AssertionFailure ? error.message : error instanceof MissingSecret ? 'Test access is unavailable' : 'Browser action could not complete',
+        ...(error instanceof AssertionFailure && error.observed ? { observed: error.observed } : {}) });
+      throw error;
     }
   }
 }
@@ -60,6 +73,7 @@ export async function executeSteps(page: Page, scenario: Scenario, base: URL, si
 export async function executeScenario(browser: Browser, run: Run, scenario: Scenario, allowedOrigins: Set<string>, artifactRoot: string, signal: AbortSignal): Promise<ScenarioResult> {
   const started = Date.now();
   const artifacts: Artifact[] = [];
+  const stepResults: ExecutionStepResult[] = [];
   const base = validateBaseUrl(run.base_url, allowedOrigins);
   if (scenario.steps.some(step => step.secret_env && !process.env[step.secret_env])) {
     return { scenario_id: scenario.id, status: 'blocked', message: 'A referenced QA_TEST_ secret is unavailable', duration_ms: Date.now() - started, artifacts };
@@ -82,7 +96,7 @@ export async function executeScenario(browser: Browser, run: Run, scenario: Scen
     });
     context = guarded.context;
     page = guarded.page;
-    await executeSteps(page, scenario, base, combined);
+    await executeSteps(page, scenario, base, combined, stepResults);
     if (guarded.violation()) throw new Error(guarded.violation());
   } catch (error) {
     if (guarded?.violation()) {
@@ -116,7 +130,7 @@ export async function executeScenario(browser: Browser, run: Run, scenario: Scen
     }
   }
   if (guarded?.violation()) { status = 'error'; message = guarded.violation(); }
-  return { scenario_id: scenario.id, status, message, duration_ms: Date.now() - started, artifacts };
+  return { scenario_id: scenario.id, status, message, duration_ms: Date.now() - started, artifacts, step_results: stepResults };
 }
 
 export function errorResult(scenario: Scenario, message: string): ScenarioResult {

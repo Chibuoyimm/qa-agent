@@ -84,9 +84,11 @@ func run(logger *slog.Logger) error {
 	}
 	proposals.ChatGPT = subscription
 	proposals.OpenCode = openCode
+	api := httpapi.New(qa.NewStore(db, allowed), proposals, repository.New(nil), apiToken, workerToken, logger)
+	api.ArtifactDirectory = os.Getenv("QA_ARTIFACT_DIR")
 	server := &http.Server{
 		Addr:              addr,
-		Handler:           httpapi.New(qa.NewStore(db, allowed), proposals, repository.New(nil), apiToken, workerToken, logger).Handler(),
+		Handler:           api.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      190 * time.Second,

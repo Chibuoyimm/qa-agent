@@ -113,7 +113,7 @@ func (s *Store) ListScenarios(ctx context.Context, projectID string) ([]Scenario
 	if !exists {
 		return nil, ErrNotFound
 	}
-	rows, err := s.db.Query(ctx, `SELECT id,project_id,name,description,expected_outcome,approved,steps,created_at
+	rows, err := s.db.Query(ctx, `SELECT id,project_id,name,description,expected_outcome,approved,steps,created_at,COALESCE(journey_id,''),COALESCE(task_id,'')
 		FROM scenarios WHERE project_id=$1 ORDER BY created_at,id`, projectID)
 	if err != nil {
 		return nil, err
@@ -123,7 +123,7 @@ func (s *Store) ListScenarios(ctx context.Context, projectID string) ([]Scenario
 	for rows.Next() {
 		var sc Scenario
 		var raw []byte
-		if err := rows.Scan(&sc.ID, &sc.ProjectID, &sc.Name, &sc.Description, &sc.ExpectedOutcome, &sc.Approved, &raw, &sc.CreatedAt); err != nil {
+		if err := rows.Scan(&sc.ID, &sc.ProjectID, &sc.Name, &sc.Description, &sc.ExpectedOutcome, &sc.Approved, &raw, &sc.CreatedAt, &sc.JourneyID, &sc.TaskID); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal(raw, &sc.Steps); err != nil {
@@ -182,7 +182,7 @@ func validateRunInput(in RunInput) error {
 }
 
 func createRunTx(ctx context.Context, tx pgx.Tx, id, projectID, baseURL string, in RunInput) (Run, error) {
-	rows, err := tx.Query(ctx, `SELECT id,project_id,name,description,expected_outcome,approved,steps,created_at
+	rows, err := tx.Query(ctx, `SELECT id,project_id,name,description,expected_outcome,approved,steps,created_at,COALESCE(journey_id,''),COALESCE(task_id,'')
 		FROM scenarios WHERE project_id=$1 AND id=ANY($2)`, projectID, in.ScenarioIDs)
 	if err != nil {
 		return Run{}, err
@@ -191,7 +191,7 @@ func createRunTx(ctx context.Context, tx pgx.Tx, id, projectID, baseURL string, 
 	for rows.Next() {
 		var sc Scenario
 		var raw []byte
-		if err := rows.Scan(&sc.ID, &sc.ProjectID, &sc.Name, &sc.Description, &sc.ExpectedOutcome, &sc.Approved, &raw, &sc.CreatedAt); err != nil {
+		if err := rows.Scan(&sc.ID, &sc.ProjectID, &sc.Name, &sc.Description, &sc.ExpectedOutcome, &sc.Approved, &raw, &sc.CreatedAt, &sc.JourneyID, &sc.TaskID); err != nil {
 			rows.Close()
 			return Run{}, err
 		}
@@ -244,7 +244,7 @@ func scanRun(row rowScanner) (Run, error) {
 	var run Run
 	var scenarios, results []byte
 	err := row.Scan(&run.ID, &run.ProjectID, &run.BaseURL, &run.Mode, &run.Status, &run.Gate,
-		&scenarios, &results, &run.CreatedAt, &run.StartedAt, &run.FinishedAt)
+		&scenarios, &results, &run.CreatedAt, &run.StartedAt, &run.FinishedAt, &run.TaskID, &run.SourceRunID)
 	if err != nil {
 		return Run{}, err
 	}
@@ -257,7 +257,7 @@ func scanRun(row rowScanner) (Run, error) {
 	return run, nil
 }
 
-const runColumns = `id,project_id,base_url,mode,status,gate,scenarios,results,created_at,started_at,finished_at`
+const runColumns = `id,project_id,base_url,mode,status,gate,scenarios,results,created_at,started_at,finished_at,COALESCE(task_id,''),COALESCE(source_run_id,'')`
 
 func (s *Store) GetRun(ctx context.Context, id string) (Run, error) {
 	if err := s.expireLeases(ctx); err != nil {
@@ -370,7 +370,7 @@ func (s *Store) ClaimRun(ctx context.Context, workerID string) (Run, string, tim
 			WHERE id=$1 RETURNING `+runColumns+`,lease_expires_at`, id, workerID, hex.EncodeToString(hash[:]))
 		var scenarios, results []byte
 		err = row.Scan(&run.ID, &run.ProjectID, &run.BaseURL, &run.Mode, &run.Status, &run.Gate,
-			&scenarios, &results, &run.CreatedAt, &run.StartedAt, &run.FinishedAt, &expiry)
+			&scenarios, &results, &run.CreatedAt, &run.StartedAt, &run.FinishedAt, &run.TaskID, &run.SourceRunID, &expiry)
 		if err == nil {
 			err = json.Unmarshal(scenarios, &run.Scenarios)
 		}
@@ -416,7 +416,7 @@ func (s *Store) CompleteRun(ctx context.Context, id string, in CompleteInput) (R
 	var leaseLive bool
 	err = tx.QueryRow(ctx, `SELECT `+runColumns+`,COALESCE(lease_token,''),COALESCE(lease_expires_at>clock_timestamp(),false)
 		FROM runs WHERE id=$1 FOR UPDATE`, id).Scan(&run.ID, &run.ProjectID, &run.BaseURL, &run.Mode, &run.Status,
-		&run.Gate, &scenarios, &results, &run.CreatedAt, &run.StartedAt, &run.FinishedAt, &storedToken, &leaseLive)
+		&run.Gate, &scenarios, &results, &run.CreatedAt, &run.StartedAt, &run.FinishedAt, &run.TaskID, &run.SourceRunID, &storedToken, &leaseLive)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Run{}, ErrNotFound
 	}

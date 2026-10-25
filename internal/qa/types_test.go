@@ -40,3 +40,25 @@ func TestResultPrecedenceAndArtifacts(t *testing.T) {
 		t.Fatal("accepted traversal artifact")
 	}
 }
+
+func TestExecutionStepRecordsCannotClaimUnreachedSteps(t *testing.T) {
+	scenarios := []Scenario{{ID: "check", ScenarioInput: ScenarioInput{Steps: []Step{{Action: "navigate"}, {Action: "assert_text"}}}}}
+	result := ScenarioResult{ScenarioID: "check", Status: "failed", StepResults: []ExecutionStepResult{{Index: 0, Action: "navigate", Status: "passed"}, {Index: 1, Action: "assert_text", Status: "failed", Observed: "wrong total"}}}
+	if _, err := ValidateResults(scenarios, []ScenarioResult{result}); err != nil {
+		t.Fatal(err)
+	}
+	result.StepResults[0].Status = "failed"
+	if _, err := ValidateResults(scenarios, []ScenarioResult{result}); err == nil {
+		t.Fatal("accepted execution after a failed step")
+	}
+	result.StepResults = result.StepResults[:1]
+	result.StepResults[0].Status = "passed"
+	result.Status = "passed"
+	if _, err := ValidateResults(scenarios, []ScenarioResult{result}); err == nil {
+		t.Fatal("accepted a pass with unreached assertions")
+	}
+	result.StepResults = nil
+	if _, err := ValidateResults(scenarios, []ScenarioResult{result}); err != nil {
+		t.Fatal("legacy worker compatibility", err)
+	}
+}

@@ -44,6 +44,8 @@ type ScenarioInput struct {
 }
 
 type Scenario struct {
+	JourneyID string `json:"journey_id,omitempty"`
+	TaskID    string `json:"task_id,omitempty"`
 	ID        string `json:"id"`
 	ProjectID string `json:"project_id"`
 	ScenarioInput
@@ -55,26 +57,38 @@ type Artifact struct {
 	Path string `json:"path"`
 }
 
+type ExecutionStepResult struct {
+	Index      int    `json:"index"`
+	Action     string `json:"action"`
+	Status     string `json:"status"`
+	DurationMS int64  `json:"duration_ms"`
+	Message    string `json:"message,omitempty"`
+	Observed   string `json:"observed,omitempty"`
+}
+
 type ScenarioResult struct {
-	ScenarioID string     `json:"scenario_id"`
-	Status     string     `json:"status"`
-	Message    string     `json:"message"`
-	DurationMS int64      `json:"duration_ms"`
-	Artifacts  []Artifact `json:"artifacts"`
+	StepResults []ExecutionStepResult `json:"step_results,omitempty"`
+	ScenarioID  string                `json:"scenario_id"`
+	Status      string                `json:"status"`
+	Message     string                `json:"message"`
+	DurationMS  int64                 `json:"duration_ms"`
+	Artifacts   []Artifact            `json:"artifacts"`
 }
 
 type Run struct {
-	ID         string           `json:"id"`
-	ProjectID  string           `json:"project_id"`
-	BaseURL    string           `json:"base_url"`
-	Mode       string           `json:"mode"`
-	Status     string           `json:"status"`
-	Gate       string           `json:"gate"`
-	Scenarios  []Scenario       `json:"scenarios"`
-	Results    []ScenarioResult `json:"results"`
-	CreatedAt  time.Time        `json:"created_at"`
-	StartedAt  *time.Time       `json:"started_at,omitempty"`
-	FinishedAt *time.Time       `json:"finished_at,omitempty"`
+	TaskID      string           `json:"task_id,omitempty"`
+	SourceRunID string           `json:"source_run_id,omitempty"`
+	ID          string           `json:"id"`
+	ProjectID   string           `json:"project_id"`
+	BaseURL     string           `json:"base_url"`
+	Mode        string           `json:"mode"`
+	Status      string           `json:"status"`
+	Gate        string           `json:"gate"`
+	Scenarios   []Scenario       `json:"scenarios"`
+	Results     []ScenarioResult `json:"results"`
+	CreatedAt   time.Time        `json:"created_at"`
+	StartedAt   *time.Time       `json:"started_at,omitempty"`
+	FinishedAt  *time.Time       `json:"finished_at,omitempty"`
 }
 
 type RunInput struct {
@@ -208,17 +222,26 @@ func ValidateResults(scenarios []Scenario, results []ScenarioResult) (string, er
 	if len(results) != len(scenarios) {
 		return "", fmt.Errorf("%w: expected exactly one result per scenario", ErrInvalid)
 	}
-	known := make(map[string]bool, len(scenarios))
+	known := make(map[string]Scenario, len(scenarios))
 	for _, scenario := range scenarios {
-		known[scenario.ID] = true
+		known[scenario.ID] = scenario
 	}
 	seen := make(map[string]bool, len(results))
 	status := "passed"
 	for _, result := range results {
-		if !known[result.ScenarioID] || seen[result.ScenarioID] {
+		scenario, exists := known[result.ScenarioID]
+		if !exists || seen[result.ScenarioID] {
 			return "", fmt.Errorf("%w: result has an unknown or duplicate scenario_id", ErrInvalid)
 		}
 		seen[result.ScenarioID] = true
+		if len(result.StepResults) > len(scenario.Steps) || (len(result.StepResults) > 0 && result.Status == "passed" && len(result.StepResults) != len(scenario.Steps)) {
+			return "", fmt.Errorf("%w: step records do not match the scenario length", ErrInvalid)
+		}
+		for i, step := range result.StepResults {
+			if step.Index != i || step.Action != scenario.Steps[i].Action || step.DurationMS < 0 || step.DurationMS > 3600000 || len(step.Message) > 1000 || len(step.Observed) > 4000 || (step.Status != "passed" && step.Status != "failed" && step.Status != "blocked" && step.Status != "error") || (result.Status == "passed" && step.Status != "passed") || (i < len(result.StepResults)-1 && step.Status != "passed") || (step.Observed != "" && (step.Action != "assert_text" || step.Status != "failed")) {
+				return "", fmt.Errorf("%w: invalid execution step result", ErrInvalid)
+			}
+		}
 		if len(result.Message) > 4000 || result.DurationMS < 0 || result.DurationMS > 3_600_000 || len(result.Artifacts) > 20 {
 			return "", fmt.Errorf("%w: result message, duration, or artifacts exceed limits", ErrInvalid)
 		}

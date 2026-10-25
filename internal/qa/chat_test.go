@@ -77,6 +77,9 @@ func TestChatRunApprovalScopeAndIdempotency(t *testing.T) {
 	if _, err := db.Exec(ctx, `UPDATE runs SET status='failed',gate='fail',results=$2 WHERE id=$1`, id, `[{"scenario_id":"`+approved.ID+`","status":"failed","message":"wrong total","duration_ms":1,"artifacts":[]}]`); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.Exec(ctx, `UPDATE scenarios SET expected_outcome='A future different rule' WHERE id=$1`, approved.ID); err != nil {
+		t.Fatal(err)
+	}
 	in = qa.ChatRunInput{RequestID: "22222222222222222222222222222222", Prompt: "Rerun failed checks", Action: "rerun_failed", Mode: "advisory", SourceRunID: id}
 	retry, err := store.CreateChatRun(ctx, project.ID, in, "retry")
 	if err != nil {
@@ -86,7 +89,7 @@ func TestChatRunApprovalScopeAndIdempotency(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rerun.Scenarios) != 1 || rerun.Scenarios[0].ExpectedOutcome != run.Scenarios[0].ExpectedOutcome {
+	if len(rerun.Scenarios) != 1 || rerun.Scenarios[0].ExpectedOutcome != run.Scenarios[0].ExpectedOutcome || rerun.SourceRunID != run.ID || rerun.BaseURL != run.BaseURL {
 		t.Fatal("rerun changed frozen expectation")
 	}
 	in.RequestID = "33333333333333333333333333333333"

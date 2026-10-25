@@ -10,7 +10,12 @@ export type Step = {
 export type Scenario = { id: string; steps: Step[] };
 export type Run = { id: string; base_url: string; scenarios: Scenario[] };
 export type Artifact = { kind: 'screenshot' | 'video'; path: string };
+export type ExecutionStepResult = {
+  index: number; action: Step['action']; status: 'passed' | 'failed' | 'blocked' | 'error';
+  duration_ms: number; message?: string; observed?: string;
+};
 export type ScenarioResult = {
+  step_results?: ExecutionStepResult[];
   scenario_id: string;
   status: 'passed' | 'failed' | 'blocked' | 'error';
   message: string;

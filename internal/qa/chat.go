@@ -27,6 +27,7 @@ type Proposal struct {
 }
 
 type ChatTurn struct {
+	TaskID    string    `json:"task_id,omitempty"`
 	ID        string    `json:"id"`
 	Sequence  int64     `json:"sequence"`
 	ProjectID string    `json:"project_id"`
@@ -43,12 +44,12 @@ type ChatPage struct {
 	HasOlder bool       `json:"has_older"`
 }
 
-const chatColumns = `id,sequence,project_id,prompt,status,reply,proposal,COALESCE(run_id,''),created_at`
+const chatColumns = `id,sequence,project_id,prompt,status,reply,proposal,COALESCE(run_id,''),created_at,COALESCE(task_id,'')`
 
 func scanChatTurn(row rowScanner) (ChatTurn, error) {
 	var turn ChatTurn
 	var raw []byte
-	err := row.Scan(&turn.ID, &turn.Sequence, &turn.ProjectID, &turn.Prompt, &turn.Status, &turn.Reply, &raw, &turn.RunID, &turn.CreatedAt)
+	err := row.Scan(&turn.ID, &turn.Sequence, &turn.ProjectID, &turn.Prompt, &turn.Status, &turn.Reply, &raw, &turn.RunID, &turn.CreatedAt, &turn.TaskID)
 	if err != nil {
 		return ChatTurn{}, err
 	}
@@ -73,13 +74,17 @@ func ValidateChatRequest(id, prompt string) error {
 const interruptedChatReply = "This request was interrupted or failed. No checks were run. Send a new message to try again."
 
 func (s *Store) ListChat(ctx context.Context, projectID string, before int64) (ChatPage, error) {
+	return s.ListTaskChat(ctx, projectID, "", before)
+}
+
+func (s *Store) ListTaskChat(ctx context.Context, projectID, taskID string, before int64) (ChatPage, error) {
 	if _, err := s.GetProject(ctx, projectID); err != nil {
 		return ChatPage{}, err
 	}
 	if _, err := s.db.Exec(ctx, `UPDATE chat_turns SET status='error',reply=$2 WHERE project_id=$1 AND status='pending' AND created_at < clock_timestamp()-interval '100 seconds'`, projectID, interruptedChatReply); err != nil {
 		return ChatPage{}, err
 	}
-	rows, err := s.db.Query(ctx, `SELECT `+chatColumns+` FROM chat_turns WHERE project_id=$1 AND ($2::bigint=0 OR sequence<$2) ORDER BY sequence DESC LIMIT 21`, projectID, before)
+	rows, err := s.db.Query(ctx, `SELECT `+chatColumns+` FROM chat_turns WHERE project_id=$1 AND ($2::bigint=0 OR sequence<$2) AND ($3='' OR task_id=$3) ORDER BY sequence DESC LIMIT 21`, projectID, before, taskID)
 	if err != nil {
 		return ChatPage{}, err
 	}
@@ -107,6 +112,15 @@ func (s *Store) ListChat(ctx context.Context, projectID string, before int64) (C
 
 // A short project lock reserves a turn; no database transaction remains open during inference.
 func (s *Store) BeginChat(ctx context.Context, projectID, id, prompt, fingerprint string) (ChatTurn, bool, error) {
+	return s.BeginTaskChat(ctx, projectID, "", id, prompt, fingerprint)
+}
+
+func (s *Store) BeginTaskChat(ctx context.Context, projectID, taskID, id, prompt, fingerprint string) (ChatTurn, bool, error) {
+	if taskID != "" {
+		if _, err := s.GetTask(ctx, projectID, taskID); err != nil {
+			return ChatTurn{}, false, err
+		}
+	}
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return ChatTurn{}, false, err
@@ -125,7 +139,7 @@ func (s *Store) BeginChat(ctx context.Context, projectID, id, prompt, fingerprin
 		if err := tx.QueryRow(ctx, `SELECT fingerprint FROM chat_turns WHERE id=$1`, id).Scan(&saved); err != nil {
 			return ChatTurn{}, false, err
 		}
-		if saved != fingerprint || existing.Status == "pending" {
+		if saved != fingerprint || existing.Status == "pending" || existing.TaskID != taskID {
 			return ChatTurn{}, false, ErrConflict
 		}
 		return existing, false, nil
@@ -137,13 +151,13 @@ func (s *Store) BeginChat(ctx context.Context, projectID, id, prompt, fingerprin
 		return ChatTurn{}, false, err
 	}
 	var busy bool
-	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM chat_turns WHERE project_id=$1 AND status='pending')`, projectID).Scan(&busy); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM chat_turns WHERE project_id=$1 AND COALESCE(task_id,'')=$2 AND status='pending')`, projectID, taskID).Scan(&busy); err != nil {
 		return ChatTurn{}, false, err
 	}
 	if busy {
 		return ChatTurn{}, false, ErrConflict
 	}
-	turn, err := scanChatTurn(tx.QueryRow(ctx, `INSERT INTO chat_turns(id,project_id,fingerprint,prompt,status) VALUES($1,$2,$3,$4,'pending') RETURNING `+chatColumns, id, projectID, fingerprint, prompt))
+	turn, err := scanChatTurn(tx.QueryRow(ctx, `INSERT INTO chat_turns(id,project_id,fingerprint,prompt,status,task_id) VALUES($1,$2,$3,$4,'pending',NULLIF($5,'')) RETURNING `+chatColumns, id, projectID, fingerprint, prompt, taskID))
 	if err != nil {
 		var postgresError *pgconn.PgError
 		if errors.As(err, &postgresError) && postgresError.Code == "23505" {
@@ -176,6 +190,7 @@ func (s *Store) FinishChat(ctx context.Context, projectID, id, reply string, pro
 }
 
 type ChatRunInput struct {
+	TaskID      string   `json:"task_id,omitempty"`
 	RequestID   string   `json:"request_id"`
 	Prompt      string   `json:"prompt"`
 	Action      string   `json:"action"`
@@ -185,6 +200,11 @@ type ChatRunInput struct {
 }
 
 func (s *Store) CreateChatRun(ctx context.Context, projectID string, in ChatRunInput, fingerprint string) (ChatTurn, error) {
+	if in.TaskID != "" {
+		if _, err := s.GetTask(ctx, projectID, in.TaskID); err != nil {
+			return ChatTurn{}, err
+		}
+	}
 	if err := ValidateChatRequest(in.RequestID, in.Prompt); err != nil {
 		return ChatTurn{}, err
 	}
@@ -225,7 +245,7 @@ func (s *Store) CreateChatRun(ctx context.Context, projectID string, in ChatRunI
 		if err := tx.QueryRow(ctx, `SELECT fingerprint FROM chat_turns WHERE id=$1`, in.RequestID).Scan(&saved); err != nil {
 			return ChatTurn{}, err
 		}
-		if saved != fingerprint || existing.RunID == "" {
+		if saved != fingerprint || existing.RunID == "" || existing.TaskID != in.TaskID {
 			return ChatTurn{}, ErrConflict
 		}
 		return existing, nil
@@ -254,6 +274,7 @@ func (s *Store) CreateChatRun(ctx context.Context, projectID string, in ChatRunI
 			return ChatTurn{}, err
 		}
 	}
+	var failedSource *Run
 	if in.Action == "rerun_failed" {
 		source, err := scanRun(tx.QueryRow(ctx, `SELECT `+runColumns+` FROM runs WHERE id=$1 AND project_id=$2 FOR UPDATE`, in.SourceRunID, projectID))
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -265,6 +286,7 @@ func (s *Store) CreateChatRun(ctx context.Context, projectID string, in ChatRunI
 		if source.Status == "queued" || source.Status == "running" {
 			return ChatTurn{}, fmt.Errorf("%w: wait for the source run to finish", ErrConflict)
 		}
+		failedSource = &source
 		ids = []string{}
 		for _, result := range source.Results {
 			if result.Status == "failed" {
@@ -282,15 +304,42 @@ func (s *Store) CreateChatRun(ctx context.Context, projectID string, in ChatRunI
 	if err != nil {
 		return ChatTurn{}, err
 	}
-	if _, err := createRunTx(ctx, tx, runID, projectID, baseURL, RunInput{Mode: in.Mode, ScenarioIDs: ids}); err != nil {
-		return ChatTurn{}, err
+	if failedSource != nil {
+		failed := make(map[string]bool, len(ids))
+		for _, id := range ids {
+			failed[id] = true
+		}
+		scenarios := []Scenario{}
+		for _, scenario := range failedSource.Scenarios {
+			if failed[scenario.ID] {
+				scenarios = append(scenarios, scenario)
+			}
+		}
+		snapshot, err := json.Marshal(scenarios)
+		if err != nil {
+			return ChatTurn{}, err
+		}
+		_, err = tx.Exec(ctx, `INSERT INTO runs(id,project_id,base_url,mode,status,gate,scenarios,results,source_run_id)
+ VALUES($1,$2,$3,$4,'queued','pending',$5,'[]'::jsonb,$6)`, runID, projectID, failedSource.BaseURL, in.Mode, snapshot, failedSource.ID)
+		if err != nil {
+			return ChatTurn{}, err
+		}
+	} else {
+		if _, err := createRunTx(ctx, tx, runID, projectID, baseURL, RunInput{Mode: in.Mode, ScenarioIDs: ids}); err != nil {
+			return ChatTurn{}, err
+		}
+	}
+	if in.TaskID != "" {
+		if _, err := tx.Exec(ctx, `UPDATE runs SET task_id=$2 WHERE id=$1`, runID, in.TaskID); err != nil {
+			return ChatTurn{}, err
+		}
 	}
 	noun := "checks"
 	if len(ids) == 1 {
 		noun = "check"
 	}
 	reply := fmt.Sprintf("Queued %d approved %s. Results will appear here. This covers the selected checks, not every possible app behaviour.", len(ids), noun)
-	turn, err := scanChatTurn(tx.QueryRow(ctx, `INSERT INTO chat_turns(id,project_id,fingerprint,prompt,status,reply,run_id) VALUES($1,$2,$3,$4,'completed',$5,$6) RETURNING `+chatColumns, in.RequestID, projectID, fingerprint, in.Prompt, reply, runID))
+	turn, err := scanChatTurn(tx.QueryRow(ctx, `INSERT INTO chat_turns(id,project_id,fingerprint,prompt,status,reply,run_id,task_id) VALUES($1,$2,$3,$4,'completed',$5,$6,NULLIF($7,'')) RETURNING `+chatColumns, in.RequestID, projectID, fingerprint, in.Prompt, reply, runID, in.TaskID))
 	if err != nil {
 		var postgresError *pgconn.PgError
 		if errors.As(err, &postgresError) && postgresError.Code == "23505" {
