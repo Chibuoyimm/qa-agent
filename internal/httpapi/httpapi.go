@@ -41,6 +41,8 @@ func (a *API) Handler() http.Handler {
 		}{Status: "ok"})
 	})
 
+	mux.Handle("GET /api/projects/{id}/access", a.authorize(a.apiToken, a.getVerifiedAccess))
+	mux.Handle("POST /api/projects/{id}/access", a.authorize(a.apiToken, a.saveVerifiedAccess))
 	mux.Handle("GET /api/projects/{id}/journeys", a.authorize(a.apiToken, a.listJourneys))
 	mux.Handle("POST /api/projects/{id}/journeys", a.authorize(a.apiToken, a.createJourney))
 	mux.Handle("POST /api/projects/{id}/scenarios/{scenario_id}/journey", a.authorize(a.apiToken, a.assignJourney))

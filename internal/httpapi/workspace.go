@@ -213,3 +213,26 @@ func (a *API) artifact(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Security-Policy", "default-src 'none'")
 	http.ServeContent(w, r, fmt.Sprintf("evidence-%d", index), info.ModTime(), file)
 }
+
+func (a *API) getVerifiedAccess(w http.ResponseWriter, r *http.Request) {
+	value, err := a.store.GetVerifiedAccess(r.Context(), r.PathValue("id"))
+	if err != nil {
+		a.fail(w, err)
+		return
+	}
+	writeJSON(w, 200, value)
+}
+func (a *API) saveVerifiedAccess(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		DiscoveryID string `json:"discovery_id"`
+	}
+	if !decodeJSON(w, r, &in) {
+		return
+	}
+	value, err := a.store.SaveVerifiedAccess(r.Context(), r.PathValue("id"), in.DiscoveryID)
+	if err != nil {
+		a.fail(w, err)
+		return
+	}
+	writeJSON(w, 200, value)
+}

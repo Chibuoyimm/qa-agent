@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -263,6 +264,23 @@ func (s *Store) DiscoverTask(ctx context.Context, projectID, id string, in TaskD
 	return discovery, nil
 }
 
+type assertionKey struct{ action, target, value string }
+
+func assertionKeys(steps []Step) []assertionKey {
+	keys := []assertionKey{}
+	for _, step := range steps {
+		if step.Action != "assert_text" && step.Action != "assert_visible" {
+			continue
+		}
+		key := assertionKey{action: step.Action, target: step.TestID}
+		if step.Value != nil {
+			key.value = *step.Value
+		}
+		keys = append(keys, key)
+	}
+	return keys
+}
+
 type ReviewedDraft struct {
 	Index int `json:"index"`
 	ScenarioInput
@@ -333,6 +351,10 @@ func (s *Store) ApproveTask(ctx context.Context, projectID, taskID string, in Ta
 	for _, draft := range in.Drafts {
 		if draft.Index >= len(turn.Proposal.Scenarios) {
 			return TaskApproval{}, ErrInvalid
+		}
+		original := turn.Proposal.Scenarios[draft.Index]
+		if draft.ExpectedOutcome != original.ExpectedOutcome && slices.Equal(assertionKeys(draft.Steps), assertionKeys(original.Steps)) {
+			return TaskApproval{}, fmt.Errorf("%w: the expected outcome changed but the assertions did not; revise the test plan before approving", ErrInvalid)
 		}
 		id, err := newID()
 		if err != nil {

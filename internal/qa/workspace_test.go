@@ -156,3 +156,82 @@ func TestTaskDiscoveryScopeAndRetry(t *testing.T) {
 		t.Fatal("cross-project journey accepted", err)
 	}
 }
+
+func TestOutcomeEditCannotApproveUnchangedAssertions(t *testing.T) {
+	store, _ := testStore(t)
+	ctx := context.Background()
+	project, err := store.CreateProject(ctx, qa.ProjectInput{Name: "Approval regression", BaseURL: "http://localhost:4174"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(ctx, project.ID, qa.TaskInput{RequestID: strings.Repeat("a", 32), Prompt: "Check sign in", Title: "Sign in", JourneyName: "Sign in"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn, _, err := store.BeginTaskChat(ctx, project.ID, task.ID, strings.Repeat("b", 32), "Check sign in", "request")
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := "Sign in"
+	draft := qa.ScenarioInput{Name: "Sign in", ExpectedOutcome: "The button says Sign in", Steps: []qa.Step{{Action: "navigate", Path: "/"}, {Action: "assert_text", TestID: "submit", Value: &value}}}
+	if _, err = store.FinishChat(ctx, project.ID, turn.ID, "Review", &qa.Proposal{Scenarios: []qa.ScenarioInput{draft}}); err != nil {
+		t.Fatal(err)
+	}
+	draft.ExpectedOutcome = "The button says Continue"
+	input := qa.TaskApprovalInput{TurnID: turn.ID, Drafts: []qa.ReviewedDraft{{Index: 0, ScenarioInput: draft}}}
+	if _, err = store.ApproveTask(ctx, project.ID, task.ID, input); !errors.Is(err, qa.ErrInvalid) {
+		t.Fatalf("prose-only edit accepted: %v", err)
+	}
+	draft.Steps[0].Path = "/login"
+	if _, err = store.ApproveTask(ctx, project.ID, task.ID, input); !errors.Is(err, qa.ErrInvalid) {
+		t.Fatalf("navigation edit bypassed guard: %v", err)
+	}
+	checks, err := store.ListScenarios(ctx, project.ID)
+	if err != nil || len(checks) != 0 {
+		t.Fatalf("rejected approval saved checks: %v", err)
+	}
+	revised := "Continue"
+	draft.Steps[1].Value = &revised
+	if _, err = store.ApproveTask(ctx, project.ID, task.ID, input); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestVerifiedAccessRequiresSuccessfulScopedDiscovery(t *testing.T) {
+	store, _ := testStore(t)
+	ctx := context.Background()
+	project, err := store.CreateProject(ctx, qa.ProjectInput{Name: "Access", BaseURL: "http://localhost:4174"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	setup := approvedScenario(t, store, project.ID)
+	discovery, err := store.CreateDiscovery(ctx, project.ID, qa.DiscoveryInput{StartPath: "/", MaxPages: 1, SetupScenarioID: setup.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.SaveVerifiedAccess(ctx, project.ID, discovery.ID); !errors.Is(err, qa.ErrInvalid) {
+		t.Fatal("unverified access accepted", err)
+	}
+	_, lease, _, found, err := store.ClaimDiscovery(ctx, "worker")
+	if err != nil || !found {
+		t.Fatal(err)
+	}
+	if _, err = store.CompleteDiscovery(ctx, discovery.ID, qa.CompleteDiscoveryInput{LeaseToken: lease, Result: discoveryResult()}); err != nil {
+		t.Fatal(err)
+	}
+	other, err := store.CreateProject(ctx, qa.ProjectInput{Name: "Other", BaseURL: "http://localhost:4174"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.SaveVerifiedAccess(ctx, other.ID, discovery.ID); !errors.Is(err, qa.ErrInvalid) {
+		t.Fatal("foreign access accepted", err)
+	}
+	saved, err := store.SaveVerifiedAccess(ctx, project.ID, discovery.ID)
+	if err != nil || saved.SetupScenarioID != setup.ID || saved.VerifiedAt == nil {
+		t.Fatalf("default setup missing: %+v %v", saved, err)
+	}
+	loaded, err := store.GetVerifiedAccess(ctx, project.ID)
+	if err != nil || loaded.DiscoveryID != discovery.ID {
+		t.Fatal("default not persisted", err)
+	}
+}
