@@ -18,3 +18,21 @@ test('cancelled/partial runs identify unfinished checks separately from assertio
  const run={scenarios:[scenario('a'),scenario('b'),scenario('c')],results:[{scenario_id:'a',status:'passed'},{scenario_id:'b',status:'error'}]} as Run
  assert.deepEqual(runCounts(run),{passed:1,failed:0,blocked:0,error:1,incomplete:1})
 })
+
+test('changed prose requires revised assertions, not just altered navigation', async () => {
+ const {requiresPlanRevision}=await import('./workspace.ts')
+ const original={...scenario('button'),expected_outcome:'Button says Sign in',steps:[{action:'navigate',path:'/'},{action:'assert_text',test_id:'submit',value:'Sign in'}]} as Scenario
+ const draft={...original,expected_outcome:'Button says Continue'}
+ assert.equal(requiresPlanRevision(original,draft),true)
+ assert.equal(requiresPlanRevision(original,{...draft,steps:[{action:'navigate',path:'/login'},original.steps[1]]}),true)
+ assert.equal(requiresPlanRevision(original,{...draft,steps:[original.steps[0],{...original.steps[1],value:'Continue'}]}),false)
+})
+test('comparison distinguishes fixed, new failures, still failing and missing proof', async () => {
+ const {compareRuns,groupRuns}=await import('./workspace.ts')
+ const before={id:'one',created_at:'1',scenarios:['a','b','c','d'].map(id=>scenario(id)),results:[{scenario_id:'a',status:'failed'},{scenario_id:'b',status:'passed'},{scenario_id:'c',status:'failed'},{scenario_id:'d',status:'failed'}]} as Run
+ const after={...before,id:'two',source_run_id:'one',created_at:'2',results:[{scenario_id:'a',status:'passed'},{scenario_id:'b',status:'failed'},{scenario_id:'c',status:'failed'}]} as Run
+ assert.deepEqual(compareRuns(before,after).map(r=>r.changed),['Fixed','New failure','Still failing','Unverified'])
+ const third={...after,id:'three',source_run_id:'two',created_at:'3'}
+ assert.equal(groupRuns([third,after,before]).length,1)
+ assert.equal(groupRuns([third,after,before])[0].length,3)
+})

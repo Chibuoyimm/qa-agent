@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { AlertCircle, ArrowRight, Code2, FileJson2, Layers3, LoaderCircle, Plus, Trash2, X } from 'lucide-react'
 import { api, defaultStep, emptyScenario, validateScenario, type Scenario, type ScenarioInput, type Step, type StepAction } from './api'
+import { requiresPlanRevision } from './workspace'
 type EditorMode = 'guided' | 'json'
 const actionText: Record<StepAction, string> = {
   navigate: 'Navigate', fill: 'Fill field', click: 'Click',
@@ -92,6 +93,7 @@ export default function ScenarioEditor({ token, projectId, initial, source, onCl
     try {
       const raw: unknown = mode === 'json' ? JSON.parse(json) : draft
       inputs = (Array.isArray(raw) ? raw : [raw]).map(validateScenario)
+      if (initial && inputs.some(input => requiresPlanRevision(initial, input))) throw new Error('The expected outcome changed but the assertions did not. Update the assertion steps, or revise the plan with the agent, before saving.')
       if (!onDraft && inputs.some(item => item.approved) && !reviewed) throw new Error('Confirm you reviewed the expected outcomes and assertions before approving.')
       if (!token || !projectId) throw new Error('Connection to the project was lost. Close and reopen this editor.')
       if (onDraft) { if (inputs.length !== 1) throw new Error('Edit one check at a time.'); onDraft({ ...inputs[0], approved: false }); onClose(); return }
@@ -123,7 +125,7 @@ export default function ScenarioEditor({ token, projectId, initial, source, onCl
         {mode === 'guided' ? <>
           <div className="form-section"><label className="field-label" htmlFor="scenario-name">Scenario name <span>*</span></label><input id="scenario-name" maxLength={200} placeholder="e.g. Net revenue excludes refunds and cancelled orders" value={draft.name} onChange={event => updateDraft({ name: event.target.value })} /></div>
           <div className="form-section"><label className="field-label" htmlFor="scenario-description">Description</label><textarea id="scenario-description" rows={2} maxLength={4000} placeholder="What user journey or business rule does this cover?" value={draft.description} onChange={event => updateDraft({ description: event.target.value })} /></div>
-          <div className="form-section"><label className="field-label" htmlFor="scenario-expected">Expected outcome <span>*</span></label><textarea id="scenario-expected" rows={3} maxLength={4000} placeholder="State the business result independently of what the current UI displays." value={draft.expected_outcome} onChange={event => updateDraft({ expected_outcome: event.target.value })} /><p className="field-help">This is the approved rule. A run cannot change it to make a failure pass.</p></div>
+          <div className="form-section"><label className="field-label" htmlFor="scenario-expected">Expected outcome <span>*</span></label><textarea id="scenario-expected" rows={3} maxLength={4000} placeholder="State the business result independently of what the current UI displays." value={draft.expected_outcome} onChange={event => updateDraft({ expected_outcome: event.target.value })} /><p className="field-help">Describe the intended rule. The assertion steps below must prove it; changing this description alone does not change the test.</p></div>
           <div className="steps-heading"><div><div className="field-label">Browser steps <span>*</span></div><p className="field-help">Use paths and data-testid selectors. Add at least one assertion for approval.</p></div><span className="count-tag">{draft.steps.length} / 50</span></div>
           <div className="step-list">{draft.steps.map((step, index) => <div className="step-card" key={index}>
             <div className="step-top"><span className="step-number">{String(index + 1).padStart(2, '0')}</span><select aria-label={`Action for step ${index + 1}`} value={step.action} onChange={event => changeAction(index, event.target.value as StepAction)}>{Object.entries(actionText).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><button className="icon-button small" aria-label={`Remove step ${index + 1}`} disabled={draft.steps.length === 1} onClick={() => updateDraft({ steps: draft.steps.filter((_, i) => i !== index) })}><Trash2 size={16} /></button></div>
