@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { coverageGroups, runCounts, requiresPlanRevision, scenarioInput } from './workspace.ts'
-import type { CoverageData, Run, Scenario } from './api.ts'
+import { coverageGroups, runCounts, requiresPlanRevision, scenarioInput, journeyStages } from './workspace.ts'
+import type { CoverageData, Run, Scenario, Step } from './api.ts'
 const scenario = (id: string, journey_id = ''): Scenario => ({ id, journey_id, project_id: 'app', name: id, description: '', expected_outcome: 'Independent expected outcome', approved: true, steps: [], created_at: '' })
 test('coverage includes untested journeys, drafts without runs, and older ungrouped checks', () => {
  const check = scenario('existing','checkout')
@@ -46,4 +46,24 @@ test('accessible assertions retain their target through validation and revision 
  const validated = validateScenario({...scenarioInput(changed),steps:[{action:'fill',locator:{label:'Password'},secret_env:'QA_TEST_PASSWORD'},...changed.steps]})
  assert.deepEqual(validated.steps[0].locator,{label:'Password'})
  assert.throws(()=>validateScenario({...scenarioInput(changed),steps:[{action:'assert_visible',locator:{role:'heading',name:'Allowed'},test_id:'other'}]}))
+})
+
+test('journey import preserves bindings and progress separates skipped stages from cleanup', async()=>{
+ const {validateScenario}=await import('./api.ts')
+ const {journeyStages}=await import('./workspace.ts')
+ const draft=validateScenario({name:'A trade',description:'',expected_outcome:'Amount is exactly 1000',approved:true,steps:[{action:'prepare_fixture',value:'local_test'},{action:'phase',value:'Create'},{action:'use_actor',value:'buyer'},{action:'capture_id',path:'/requests/',save_as:'request_id'},{action:'assert_json_number',path:'/api/requests/{{request_id}}',json_pointer:'/amount',value:'1000'},{action:'phase',value:'Accept'},{action:'click',locator:{role:'button',name:'Accept'}},{action:'cleanup_fixture',value:'local_test'}]})
+ assert.equal(draft.steps[4].path,'/api/requests/{{request_id}}')
+ const result={scenario_id:'flow',status:'failed',step_results:draft.steps.map((s,i)=>({index:i,action:s.action,status:i<4||i===7?'passed':i===4?'failed':'not_run',duration_ms:1}))} as Run['results'][number]
+ assert.deepEqual(journeyStages(draft.steps,result,false).map(s=>s.status),['passed','failed','not_run','passed'])
+ assert.deepEqual(runCounts({scenarios:[scenario('flow')],results:[{...result,status:'running'}]} as Run),{passed:0,failed:0,blocked:0,error:0,incomplete:1})
+ assert.throws(()=>validateScenario({...draft,steps:draft.steps.slice(0,-1)}),/cleanup/i)
+ assert.throws(()=>validateScenario({...draft,steps:[{action:'navigate',path:'/requests/{{not_saved}}'},{action:'assert_path',path:'/'}]}),/identifier/i)
+})
+
+test('a recorded stage marker shows the active stage before its assertions finish', () => {
+ const steps: Step[] = [{action:'phase',value:'Publish request'},{action:'assert_path',path:'/requests/new'},{action:'phase',value:'Offer'},{action:'assert_path',path:'/offers/new'}]
+ const result = {scenario_id:'one',status:'running' as const,message:'Executing',duration_ms:1,artifacts:[],step_results:[{index:0,action:'phase' as const,status:'passed' as const,duration_ms:0}]}
+ const stages=journeyStages(steps,result,true)
+ assert.equal(stages[0].status,'running')
+ assert.equal(stages[1].status,'pending')
 })

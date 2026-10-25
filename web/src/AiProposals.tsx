@@ -3,7 +3,7 @@ import {
   AlertCircle, ArrowRight, Check, CircleHelp, ExternalLink, Info, KeyRound, LoaderCircle,
   LockKeyhole, RefreshCw, ShieldCheck, Sparkles, Square, X,
 } from 'lucide-react'
-import { api, chatRunCommand, providerName, type ChatRunAction, type AiProvider, type AiConfig, type AiProposalResponse, type ChatGptLogin, type ChatGptModel, type ChatGptProfile, type ChatGptStatus, type OpenCodeStatus, type ScenarioInput } from './api'
+import { api, chatRunCommand, providerName, type ChatRunAction, type AiProvider, type AiConfig, type AiProposalResponse, type ChatGptLogin, type ChatGptModel, type ChatGptProfile, type ChatGptStatus, type OpenCodeStatus, type ScenarioInput, type FixtureProfile } from './api'
 import { OpenCodeConnection } from './OpenCodeConnection'
 import { SnapshotBrowser } from './SnapshotBrowser'
 import { DiscoveryBrowser } from './Discoveries'
@@ -29,7 +29,8 @@ type ConversationComposer = {
   command: (prompt: string, action: ChatRunAction, signal: AbortSignal) => Promise<void>
 }
 
-export default function AiProposals({ token, projectId, onClose, onReview, conversation, repositorySearch, settingsOnly = false, configRevision = 0, onReady }: {
+export default function AiProposals({ token, projectId, onClose, onReview, conversation, repositorySearch, settingsOnly = false, configRevision = 0, onReady, targetOrigin }: {
+  targetOrigin?: string
   onReady?: (ready: boolean) => void
   settingsOnly?: boolean
   configRevision?: number
@@ -63,6 +64,11 @@ export default function AiProposals({ token, projectId, onClose, onReview, conve
   const [providerKey, setProviderKey] = useState('')
   const [prompt, setPrompt] = useState('')
   const [context, setContext] = useState('')
+  const [journey,setJourney]=useState(false)
+  const [fixtureId,setFixtureId]=useState('')
+  const [fixtures,setFixtures]=useState<FixtureProfile[]>([])
+  const [fixtureError,setFixtureError]=useState('')
+  useEffect(()=>{const abort=new AbortController();void api<FixtureProfile[]>(token,'/api/fixture-profiles',{signal:abort.signal}).then(value=>{setFixtures(value);setFixtureError('')}).catch(()=>{if(!abort.signal.aborted)setFixtureError('Test-data profiles could not be loaded.')});return()=>abort.abort()},[token,configRevision])
   const [snapshotIds, setSnapshotIds] = useState<string[]>([])
   const [discoveryId, setDiscoveryId] = useState('')
   const [consent, setConsent] = useState(false)
@@ -88,11 +94,12 @@ export default function AiProposals({ token, projectId, onClose, onReview, conve
     const key = conversation?.draftKey
     if (!key) return
     try {
-      const saved = JSON.parse(sessionStorage.getItem(key) || 'null') as { prompt?: string; context?: string; snapshots?: string[]; discovery?: string } | null
+      const saved = JSON.parse(sessionStorage.getItem(key) || 'null') as { prompt?: string; context?: string; snapshots?: string[]; discovery?: string; journey?: boolean; fixtureId?: string } | null
       setPrompt(saved?.prompt ?? conversation?.initialPrompt ?? '')
       setContext(saved?.context ?? '')
       setSnapshotIds(saved?.snapshots ?? [])
       setDiscoveryId(saved?.discovery ?? '')
+      setJourney(saved?.journey??false);setFixtureId(saved?.fixtureId??'')
     } catch { setPrompt(conversation?.initialPrompt ?? '') }
     setConsent(false)
     setLoadedDraft(key)
@@ -102,8 +109,8 @@ export default function AiProposals({ token, projectId, onClose, onReview, conve
   }, [conversation?.initialPrompt])
   useEffect(() => {
     if (!conversation?.draftKey || loadedDraft !== conversation.draftKey) return
-    try { sessionStorage.setItem(loadedDraft, JSON.stringify({ prompt, context, snapshots: snapshotIds, discovery: discoveryId })) } catch { /* Draft storage may be unavailable in private browsing. */ }
-  }, [prompt, context, snapshotIds, discoveryId, loadedDraft, conversation?.draftKey])
+    try { sessionStorage.setItem(loadedDraft, JSON.stringify({ prompt, context, snapshots: snapshotIds, discovery: discoveryId, journey, fixtureId })) } catch { /* Draft storage may be unavailable in private browsing. */ }
+  }, [prompt, context, snapshotIds, discoveryId, journey, fixtureId, loadedDraft, conversation?.draftKey])
   useEffect(() => {
     if (!config || configLoading || !model) return
     try { localStorage.setItem(`qa-ai-choice:${projectId}`, JSON.stringify({ provider, credentialMode, model, selectedProfileId })) } catch { /* Connection keys are never persisted. */ }
@@ -401,7 +408,7 @@ export default function AiProposals({ token, projectId, onClose, onReview, conve
         method: 'POST',
         signal: abort.signal,
         headers: credentialMode === 'byok' ? { 'X-QA-Provider-Key': transientKey, ...(provider === 'anthropic' && transientWorkspace ? { 'X-QA-Anthropic-Workspace': transientWorkspace } : {}) } : undefined,
-        body: JSON.stringify({ provider, prompt: prompt.trim(), context: context.trim(), model, credential_mode: credentialMode, ...(credentialMode === 'chatgpt' ? { chatgpt_profile_id: selectedProfileId } : {}), consent: true, repository_snapshot_ids: snapshotIds, ...(discoveryId ? { discovery_id: discoveryId } : {}) }),
+        body: JSON.stringify({ provider, journey, fixture_id: journey ? fixtureId : '', prompt: prompt.trim(), context: context.trim(), model, credential_mode: credentialMode, ...(credentialMode === 'chatgpt' ? { chatgpt_profile_id: selectedProfileId } : {}), consent: true, repository_snapshot_ids: snapshotIds, ...(discoveryId ? { discovery_id: discoveryId } : {}) }),
       }
       if (repositorySearch) {
         await repositorySearch.send(options)
@@ -479,6 +486,7 @@ export default function AiProposals({ token, projectId, onClose, onReview, conve
                 {credentialMode === 'chatgpt' && selectedProfile?.connected && selectedProfile.sharing && chatgpt?.active_profile_id === selectedProfileId && !chatgptModelsLoading && chatgptModels.length === 0 && <p className="ai-key-note">No models are available for this account.</p>}
                 {credentialMode === 'byok' && <><label className="field-label" htmlFor={fieldID("ai-provider-key")}>{recipient} API key</label><input id={fieldID("ai-provider-key")} type="password" autoComplete="off" placeholder="Enter key for this request" value={providerKey} onChange={event => { setProviderKey(event.target.value); invalidateContext() }} />{provider === 'anthropic' && <><label className="field-label" htmlFor={fieldID("ai-workspace")}>Anthropic workspace ID <span className="optional">optional</span></label><input id={fieldID("ai-workspace")} type="text" autoComplete="off" placeholder="wrkspc_…" value={workspaceId} onChange={event => { setWorkspaceId(event.target.value); invalidateContext() }} /><p className="ai-workspace-note">Required for a key that is not scoped to one workspace.</p></>}<p className="ai-key-note"><LockKeyhole size={13} />Cleared on submit. Never stored in browser storage.</p></>}
               </div></div></details>
+            {conversation && <div className="journey-controls"><label className="inline-check"><input type="checkbox" checked={journey} disabled={generating||conversation.disabled} onChange={event=>{setJourney(event.target.checked);invalidateContext()}} />Plan a complete journey</label>{journey&&<><p>Review one ordered plan for all participants. A failed required step stops later stages.</p><label htmlFor={fieldID('fixture')}>Test data</label><select id={fieldID('fixture')} value={fixtureId} disabled={generating||conversation.disabled} onChange={event=>{setFixtureId(event.target.value);invalidateContext()}}><option value="">Use existing app data</option>{fixtures.filter(f=>!targetOrigin||f.origins.includes(targetOrigin)).map(f=><option key={f.id} value={f.id}>{f.name} · fresh data each run</option>)}</select>{fixtureId?<p>{fixtures.find(f=>f.id===fixtureId)?.description} Preparation starts after approval. Cleanup is attempted after success, failure, or cancellation; its outcome appears in results. App exploration is skipped for this fresh-data plan, so attach source context or existing observations.</p>:<p>Browser sessions start fresh. Existing application records are reused; an engineer can configure a fresh-data routine for repeatable write tests.</p>}{fixtureError&&<p role="alert">{fixtureError}</p>}</>}</div>}
             {conversation && <div className="chat-message-field"><label className="field-label" htmlFor={fieldID("ai-chat-message")}>Your message</label><textarea id={fieldID("ai-chat-message")} maxLength={4000} rows={3} placeholder="What would you like to test?" value={prompt} disabled={generating || conversation.disabled} onChange={event => { setPrompt(event.target.value); invalidateContext() }} /><small>Try “run all approved checks” or “rerun failed checks”. Those commands use existing checks without an AI call.</small></div>}
             {!settingsOnly && <label className="ai-consent"><input type="checkbox" checked={consent} onChange={event => setConsent(event.target.checked)} /><span>{repositorySearch ? `I agree to send my testing request and repository file names and sizes to ${recipient} to find relevant files. File contents and repository credentials are excluded from this AI request.` : conversation ? `I agree to send this message and its testing context to ${recipient}.` : selectedSources ? `I have reviewed the selected context and agree to send my testing request, application context, and ${selectedSources} to ${recipient} to generate proposals.` : `I agree to send my testing request and application context to ${recipient} to generate proposals.`}</span></label>}
             {conversation && <details className="sharing-details"><summary>What will be shared?</summary><p>Your message, up to eight recent drafting exchanges, application context, browser observations, approved access steps, run results, and any selected reviewed sources go to {recipient}. Messages and proposals are saved in this app. Connection keys are excluded.</p></details>}

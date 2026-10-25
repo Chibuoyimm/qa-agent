@@ -1,9 +1,12 @@
-export type StepAction = 'navigate' | 'fill' | 'click' | 'assert_text' | 'assert_visible'
+export type StepAction = 'navigate' | 'fill' | 'click' | 'assert_text' | 'assert_visible' | 'assert_absent' | 'assert_path' | 'select_option' | 'phase' | 'use_actor' | 'prepare_fixture' | 'cleanup_fixture' | 'capture_id' | 'capture_json' | 'assert_json' | 'assert_json_number'
 
 export type ElementLocator = { role?: string; name?: string; label?: string }
 
 export type Step = {
   action: StepAction
+  save_as?: string
+  json_pointer?: string
+  value_ref?: string
   path?: string
   test_id?: string
   locator?: ElementLocator
@@ -18,6 +21,8 @@ export type ScenarioInput = {
   approved: boolean
   steps: Step[]
 }
+
+export type FixtureProfile = { id: string; name: string; description: string; origins: string[]; secret_refs: string[] }
 
 export type Project = {
   id: string
@@ -39,12 +44,12 @@ export type RunStatus = 'queued' | 'running' | ResultStatus | 'cancelled'
 export type RunMode = 'advisory' | 'blocking'
 export type Gate = 'pending' | 'pass' | 'warn' | 'fail'
 
-export type Artifact = { kind: 'screenshot' | 'video'; path: string }
-export type ExecutionStepResult = { index: number; action: StepAction; status: ResultStatus; duration_ms: number; message?: string; observed?: string }
+export type Artifact = { kind: 'screenshot' | 'video'; path: string; actor?: string }
+export type ExecutionStepResult = { index: number; action: StepAction; status: ResultStatus | 'not_run'; duration_ms: number; message?: string; observed?: string }
 export type ScenarioResult = {
   step_results?: ExecutionStepResult[]
   scenario_id: string
-  status: ResultStatus
+  status: ResultStatus | 'running'
   message: string
   duration_ms: number
   artifacts: Artifact[]
@@ -141,7 +146,13 @@ export const defaultStep = (action: StepAction): Step => {
     case 'fill': return { action, test_id: '', value: '' }
     case 'click': return { action, test_id: '' }
     case 'assert_text': return { action, test_id: '', value: '' }
-    case 'assert_visible': return { action, test_id: '' }
+    case 'assert_visible': case 'assert_absent': return { action, test_id: '' }
+    case 'phase': case 'use_actor': case 'prepare_fixture': case 'cleanup_fixture': return { action, value: '' }
+    case 'assert_path': return { action, path: '/' }
+    case 'capture_id': return { action, path: '/', save_as: '' }
+    case 'capture_json': return { action, path: '/', save_as: '', json_pointer: '/id' }
+    case 'assert_json': case 'assert_json_number': return { action, path: '/', json_pointer: '/status', value: '' }
+    case 'select_option': return { action, test_id: '', value: '' }
   }
 }
 
@@ -274,6 +285,41 @@ export function validateLocator(value: unknown): ElementLocator {
   return { role: locator.role, name: locator.name }
 }
 
+const bindingName = /^[a-z][a-z0-9_]{0,39}$/
+const bindingToken = /\{\{([a-z][a-z0-9_]{0,39})\}\}/g
+const safePath = (value: unknown): value is string => typeof value === 'string' && value.length <= 2048 && value.startsWith('/') && !value.startsWith('//') && !/[?#\\\s]/.test(value) && !value.includes('..')
+function validateJourneyStep(step: Record<string, unknown>): Step {
+ const action=step.action as StepAction
+ const fields=['action','path','value','save_as','json_pointer','value_ref']
+ if(Object.keys(step).some(k=>!fields.includes(k))) throw new Error('Remove unsupported journey fields.')
+ if(['phase','use_actor','prepare_fixture','cleanup_fixture'].includes(action)) {
+  if(Object.keys(step).some(k=>!['action','value'].includes(k)) || typeof step.value!=='string' || !step.value.trim() || step.value.length>200 || (action!=='phase'&&!bindingName.test(step.value))) throw new Error('Journey controls require a name in value.')
+  return {action,value:step.value}
+ }
+ if(!safePath(step.path)) throw new Error('Use an approved same-origin path.')
+ if(action==='assert_path') {if(Object.keys(step).some(k=>!['action','path'].includes(k))) throw new Error('Path assertions only accept path.');return {action,path:step.path}}
+ if(action==='capture_id') {if(Object.keys(step).some(k=>!['action','path','save_as'].includes(k)) || !step.path.endsWith('/') || typeof step.save_as!=='string' || !bindingName.test(step.save_as))throw new Error('Record capture needs a path prefix and a saved name.');return {action,path:step.path,save_as:step.save_as}}
+ if(typeof step.json_pointer!=='string'||!step.json_pointer.startsWith('/')||step.json_pointer.length>300||/~(?![01])/.test(step.json_pointer))throw new Error('A valid JSON pointer is required.')
+ const identifier=/(?:^|\/)(?:id|[^/]+_id)$/.test(step.json_pointer)
+ if(action==='capture_json') {if(step.value!==undefined||step.value_ref!==undefined||typeof step.save_as!=='string'||!bindingName.test(step.save_as)||!identifier)throw new Error('Capture an identifier field using save_as.');return {action,path:step.path,json_pointer:step.json_pointer,save_as:step.save_as}}
+ const literal=typeof step.value==='string',reference=typeof step.value_ref==='string'
+ if(step.save_as!==undefined||literal===reference||(reference&&(!identifier||!bindingName.test(step.value_ref as string)))||(literal&&(step.value as string).length>4000)||(action==='assert_json_number'&&(!literal||!/^[-+]?[0-9]{1,100}(\.[0-9]{1,100})?$/.test(step.value as string))))throw new Error('Use a fixed expected value, or a saved identifier for an ID field.')
+ return {action,path:step.path,json_pointer:step.json_pointer,...(literal?{value:step.value as string}:{value_ref:step.value_ref as string})}
+}
+export function validateJourneyBindings(steps: Step[]) {
+ const known=new Set(['run_id']),actors=new Set<string>();let fixture=''
+ for(const [index,step] of steps.entries()) {
+  for(const value of [step.path??'',step.action==='fill'?step.value??'':'']) {for(const match of value.matchAll(bindingToken)) if(!known.has(match[1])) throw new Error(`Step ${index+1} refers to an identifier before it is saved.`);if(/[{}]{2}/.test(value.replace(bindingToken,'')))throw new Error('Malformed journey reference.')}
+  if(step.value_ref&&!known.has(step.value_ref))throw new Error('Expected identifier has not been saved.')
+  if(step.save_as){if(known.has(step.save_as))throw new Error('Saved identifiers cannot be overwritten.');known.add(step.save_as)}
+  if(step.action==='use_actor'){actors.add(step.value!);if(actors.size>5)throw new Error('Use up to five participants.')}
+  if(step.action==='prepare_fixture'){if(index!==0)throw new Error('Prepare test data first.');fixture=step.value!}
+  if(step.action==='cleanup_fixture'&&(index!==steps.length-1||!fixture||fixture!==step.value))throw new Error('Cleanup must close the matching test data profile last.')
+ }
+ if(fixture&&steps.at(-1)?.action!=='cleanup_fixture')throw new Error('Prepared test data needs an approved cleanup step.')
+ if(steps.length>50&&!steps.some(s=>['phase','use_actor','prepare_fixture'].includes(s.action)))throw new Error('Ordinary checks support up to fifty steps.')
+}
+
 export function validateScenario(input: unknown): ScenarioInput {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Each scenario must be a JSON object.')
   const data = input as Record<string, unknown>
@@ -284,13 +330,14 @@ export function validateScenario(input: unknown): ScenarioInput {
   if (typeof data.description !== 'string' || data.description.length > 4000) throw new Error('Description must be at most 4000 characters.')
   if (typeof data.expected_outcome !== 'string' || !data.expected_outcome.trim() || data.expected_outcome.length > 4000) throw new Error('Expected outcome is required and must be at most 4000 characters.')
   if (typeof data.approved !== 'boolean') throw new Error('Approved must be true or false.')
-  if (!Array.isArray(data.steps) || data.steps.length < 1 || data.steps.length > 50) throw new Error('Add 1–50 steps.')
+  if (!Array.isArray(data.steps) || data.steps.length < 1 || data.steps.length > 200) throw new Error('Add up to 50 check steps, or 200 journey steps.')
   const steps = data.steps.map((raw, index): Step => {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error(`Step ${index + 1} must be an object.`)
     const step = raw as Record<string, unknown>
-    const action = step.action
-    if (action !== 'navigate' && action !== 'fill' && action !== 'click' && action !== 'assert_text' && action !== 'assert_visible') throw new Error(`Step ${index + 1} has an unsupported action.`)
-    const fields = action === 'navigate' ? ['action', 'path'] : action === 'fill' ? ['action', 'test_id', 'locator', 'value', 'secret_env'] : action === 'assert_text' ? ['action', 'test_id', 'locator', 'value'] : ['action', 'test_id', 'locator']
+    const action = step.action as StepAction
+    if (!['navigate','fill','click','assert_text','assert_visible','assert_absent','assert_path','select_option','phase','use_actor','prepare_fixture','cleanup_fixture','capture_id','capture_json','assert_json','assert_json_number'].includes(String(action))) throw new Error(`Step ${index + 1} has an unsupported action.`)
+    if (['phase','use_actor','prepare_fixture','cleanup_fixture','capture_id','capture_json','assert_json','assert_json_number','assert_path'].includes(String(action))) return validateJourneyStep(step)
+    const fields = action === 'navigate' ? ['action', 'path'] : action === 'fill' ? ['action', 'test_id', 'locator', 'value', 'secret_env'] : (action === 'assert_text' || action === 'select_option') ? ['action', 'test_id', 'locator', 'value'] : ['action', 'test_id', 'locator']
     const extraField = Object.keys(step).find(key => !fields.includes(key))
     if (extraField) throw new Error(`Step ${index + 1}: remove “${extraField}” for ${action}.`)
     if (action === 'navigate') {
@@ -312,13 +359,14 @@ export function validateScenario(input: unknown): ScenarioInput {
       if (hasSecret && !(step.secret_env as string).startsWith('QA_TEST_')) throw new Error(`Step ${index + 1}: secret_env must start with QA_TEST_.`)
       return hasSecret ? { action, ...target, secret_env: step.secret_env as string } : { action, ...target, value: step.value as string }
     }
-    if (action === 'assert_text') {
+    if (action === 'assert_text' || action === 'select_option') {
       if (typeof step.value !== 'string') throw new Error(`Step ${index + 1}: exact expected text is required.`)
       return { action, ...target, value: step.value }
     }
     return { action, ...target }
   })
-  if (data.approved && !steps.some(step => step.action === 'assert_text' || step.action === 'assert_visible')) throw new Error('Approved scenarios need at least one assertion.')
+  validateJourneyBindings(steps)
+  if (data.approved && !steps.some(step => step.action.startsWith('assert_'))) throw new Error('Approved scenarios need at least one assertion.')
   return {
     name: data.name.trim(), description: data.description.trim(),
     expected_outcome: data.expected_outcome.trim(), approved: data.approved, steps,

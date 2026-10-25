@@ -47,4 +47,38 @@ Checks can target an existing `test_id`, an exact field label (`locator: {"label
 
 Discovery includes visible headings and publishes an accessible locator only after Playwright confirms that it uniquely resolves to the observed control. Unnamed or duplicate controls may still appear as observations without an executable locator. The planner must ask for missing context rather than invent a target. Execution uses exact matches and rejects ambiguous actions; it never selects the first matching control. Editing a locator changes the assertion definition and remains subject to plan review.
 
-This first pilot supports navigation, fill, click, visible assertions, and exact text assertions. Native select changes, multiple browser actors in one scenario, and email-inbox actions need additional capabilities or explicit setup. Discovery is bounded to five pages and does not certify an entire app.
+The runner supports navigation, fill, click, native select changes, visible/absent assertions, exact text, and complete journeys described below. Email-inbox actions are not supported. Discovery is bounded to five pages and does not certify an entire app.
+
+## Complete journeys
+
+In Test, enable **Plan a complete journey**. Describe the business outcome for all participants, attach reviewed source context or browser observations, and select a fresh-data profile if an engineer has configured one for this exact target origin. The agent returns one ordered plan with named stages, participant aliases, fixed expectations, and preparation/cleanup steps. Missing routes, controls or expectations become questions before approval. Review the entire plan, then choose **Approve & run journey** once.
+
+The worker keeps a separate browser context for each participant. Switching back preserves that participant’s cookies and session. Created IDs flow forward automatically; amounts, currencies, statuses and other business expectations stay fixed. A failed required step stops later dependent steps, which appear as **Not run**. Results group the recorded steps by stage and retain separate participant recordings. **Run journey again** uses the same approved definition with a new run ID and fresh browser sessions; a selected profile prepares fresh owned data each time.
+
+A complete journey supports up to 200 ordered steps and five named participants; ordinary checks retain their 50-step limit. Planning can take up to six minutes; the worker has a ten-minute run limit. Runs remain leased and durable, and are not automatically replayed after a crash.
+
+### Engineer-installed fresh data
+
+Set `QA_FIXTURE_CONFIG` to the same absolute JSON path for the API and worker, then restart both. [The profile example](../examples/fixtures/profiles.example.json) shows the configuration. Use exact allowed origins. The API only exposes each profile’s ID, name, description, origins and `QA_TEST_` credential reference names. Prepare/cleanup argument arrays and environment values never go to the planner or web client.
+
+The worker runs configured argument arrays directly, without a shell. The model cannot supply a command. Hooks receive `QA_RUN_ID`, `QA_TARGET_ORIGIN`, a private `QA_FIXTURE_STATE_DIR`, minimal process settings, and only the profile’s listed `QA_FIXTURE_` environment references. Preparation emits JSON of the form `{"env":{"QA_TEST_EMAIL":"..."}}` for exactly its registered references. Those values stay in that run’s memory. Do not log credentials or return unregistered fields. Hook output is bounded to 64 KiB, stderr is not recorded, and hook timeouts are at most 60 seconds.
+
+Hooks must derive ownership from the run ID, tolerate partial preparation, and make cleanup idempotent. Cleanup runs after success, required-step failure, graceful shutdown or cancellation. A cleanup failure makes the journey an error and remains visible in Results. Cancellation stays cancelled even when its final cleanup report arrives. An abrupt machine failure or killed worker cannot guarantee cleanup: inspect the saved run, clean records for that run ID using the trusted hook, and then create a new run. Unfinished stages are not evidence that cleanup succeeded.
+
+The included [Escrow FX hook](../examples/fixtures/escrow.py) only permits the disposable local database `escrow_qa_journey` on port 55442. It prepares two synthetic, email-verified customers; the browser must perform KYC and marketplace mutations. Cleanup refuses to remove records involving an unowned participant. It is an example for that app’s schema, not a general database reset routine. The profile requires the escrow repository’s Python environment and migrations. It does not test live email, KYC or payments.
+
+Fresh-data preparation happens only inside an approved run. Automatic pre-plan exploration is skipped when a fresh-data profile is selected; attach source context or previously reviewed observations. Complete journeys cannot serve as discovery sign-in setup, since that would execute their business mutations before journey approval.
+
+### Ordered step contract
+
+- `phase` labels a stage; `use_actor` switches to its `value` alias.
+- `prepare_fixture` must be first and `cleanup_fixture` last, with the same selected profile ID in `value`.
+- `capture_id` waits for a known URL prefix ending `/` and stores the single identifier segment in `save_as`. It waits for the URL to change from the page before the preceding click/navigation, so a creation route such as `/requests/new` cannot be mistaken for the new record ID.
+- `capture_json` reads an identifier JSON pointer (`id` or `*_id`) from a same-origin GET and saves it in `save_as`.
+- Later paths and literal fill values may use `{{identifier}}`; `{{run_id}}` is predefined. References must be declared earlier and cannot be overwritten.
+- `assert_path` checks an exact same-origin path. `assert_absent` checks a named control is hidden or absent. `select_option` uses the native option value.
+- `assert_json` checks a scalar JSON pointer against a fixed `value`, or an earlier identifier via `value_ref`. `assert_json_number` compares a fixed decimal exactly, including API decimal strings with trailing zeros. Observed business values cannot become dynamic expectations.
+
+Read-only JSON checks run through the browser with the current actor’s authenticated cookies, reject redirects, and limit the response to 64 KiB. Navigate the actor to the target app before reading JSON. Paths stay on the approved target origin. They do not persist raw responses, credentials or captured identifier values in results.
+
+`POST /api/worker/runs/{id}/progress` records bounded step progress using the existing lease token and frozen scenario snapshot. It cannot approve a plan, renew a lease or change a run’s final outcome. A cancelled or expired worker has a short window to record final cleanup only. Existing run/scenario JSON storage carries the ordered steps; no separate workflow service or migration is needed.

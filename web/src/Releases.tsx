@@ -81,8 +81,8 @@ export default function Releases({ token, projectId, onOpenSnapshot }: {
   const run = release?.run
   const results = new Map(run?.results?.map(result => [result.scenario_id, result]) ?? [])
   const counts = { passed: 0, failed: 0, blocked: 0, error: 0 }
-  run?.results?.forEach(result => { counts[result.status] += 1 })
-  const incomplete = run ? Math.max(0, run.scenarios.length - (run.results?.length ?? 0)) : 0
+  run?.results?.forEach(result => { if(result.status!=='running') counts[result.status] += 1 })
+  const incomplete = run ? Math.max(0, run.scenarios.length - (run.results?.filter(result=>result.status!=='running').length ?? 0)) : 0
 
   return <>
     <div className="page-heading"><div><div className="eyebrow">DEPLOYMENT PROOF</div><h1>Releases</h1><p>See the deployed target, exact source revisions, and the checks behind each gate.</p></div>

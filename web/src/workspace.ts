@@ -3,8 +3,8 @@ import type { CoverageData, Scenario, ScenarioInput, Run, Step, TestingTask, Jou
 export const errorText = (error: unknown) => error instanceof Error ? error.message : 'Could not complete this request.'
 export const scenarioInput = (s: ScenarioInput): ScenarioInput => ({ name: s.name, description: s.description, expected_outcome: s.expected_outcome, approved: s.approved, steps: s.steps.map(step => ({ ...step })) })
 export function runCounts(run: Run) {
-  const counts = { passed: 0, failed: 0, blocked: 0, error: 0, incomplete: run.scenarios.length - run.results.length }
-  for (const result of run.results) counts[result.status]++
+  const counts = { passed: 0, failed: 0, blocked: 0, error: 0, incomplete: run.scenarios.length - run.results.filter(r=>r.status!=='running').length }
+  for (const result of run.results) if(result.status!=='running') counts[result.status]++
   return counts
 }
 // Each check appears once, using the latest recorded attempt supplied by the API.
@@ -24,7 +24,9 @@ export function coverageGroups(data: CoverageData) {
 
 export const checkCount = (count: number) => `${count} ${count === 1 ? 'check' : 'checks'}`
 export function assertionKey(steps: Step[]) {
-  return JSON.stringify(steps.filter(step => step.action.startsWith('assert_')).map(step => [step.action, step.test_id, step.locator?.role, step.locator?.name, step.locator?.label, step.value ?? '']))
+ let actor='';const keys:unknown[]=[]
+ for(const step of steps){if(step.action==='use_actor')actor=step.value??'';if(step.action.startsWith('assert_'))keys.push([actor,step.action,step.test_id,step.locator?.role,step.locator?.name,step.locator?.label,step.path,step.json_pointer,step.value_ref,step.value??''])}
+ return JSON.stringify(keys)
 }
 export function requiresPlanRevision(original: ScenarioInput, draft: ScenarioInput) {
   return original.expected_outcome !== draft.expected_outcome && assertionKey(original.steps) === assertionKey(draft.steps)
@@ -33,6 +35,16 @@ export const targetLabel = (step: Step) => step.locator?.label || (step.locator?
 export function stepLabel(step: Step): string {
   const target = targetLabel(step)
   switch (step.action) {
+    case 'phase': return `Stage: ${step.value}`
+    case 'use_actor': return `Continue as ${step.value}`
+    case 'prepare_fixture': return `Prepare fresh test data with ${step.value}`
+    case 'cleanup_fixture': return `Remove this run’s test data with ${step.value}`
+    case 'capture_id': return `Save the new record identifier as ${step.save_as}`
+    case 'capture_json': return `Save ${step.json_pointer} as ${step.save_as}`
+    case 'assert_json': case 'assert_json_number': return `Check saved ${step.json_pointer} equals ${step.value_ref ? `the saved ${step.value_ref}` : step.value}`
+    case 'assert_path': return `Check that the page is ${step.path}`
+    case 'assert_absent': return `Check that ${target} is absent`
+    case 'select_option': return `Choose ${step.value} in ${target}`
     case 'navigate': return `Open ${step.path}`
     case 'fill': return `Enter ${step.secret_env ? 'the saved test credential' : 'the configured value'} in ${target}`
     case 'click': return `Select ${target}`
@@ -72,4 +84,23 @@ export function groupRuns(runs: Run[]) {
     groups.set(root.id, [...(groups.get(root.id) ?? []), run])
   }
   return [...groups.values()].sort((a,b) => b[0].created_at.localeCompare(a[0].created_at))
+}
+
+export function journeySummary(steps: Step[]) {return {actors:[...new Set(steps.filter(s=>s.action==='use_actor').map(s=>s.value!))],phases:steps.filter(s=>s.action==='phase').map(s=>s.value!),fixture:steps.find(s=>s.action==='prepare_fixture')?.value,assertions:steps.filter(s=>s.action.startsWith('assert_')).length}}
+
+export function journeyStages(steps: Step[], result: Run['results'][number] | undefined, running: boolean) {
+ const groups: {name:string; indexes:number[]; actors:string[]}[]=[]
+ let group:typeof groups[number]|undefined,actor=''
+ for(const [index,step] of steps.entries()) {
+  if(step.action==='use_actor')actor=step.value??''
+  if(step.action==='prepare_fixture'||step.action==='cleanup_fixture'||step.action==='phase') {group={name:step.action==='prepare_fixture'?'Prepare fresh test data':step.action==='cleanup_fixture'?'Clean up test data':step.value??'Journey stage',indexes:[],actors:[]};groups.push(group)}
+  if(group){group.indexes.push(index);if(actor&&!['phase','prepare_fixture','cleanup_fixture','use_actor'].includes(step.action)&&!group.actors.includes(actor))group.actors.push(actor)}
+ }
+ return groups.map(group=>{
+  const records=group.indexes.map(index=>result?.step_results?.find(r=>r.index===index))
+  const failed=records.find(r=>r&&['failed','error','blocked'].includes(r.status))
+  const passed=records.filter(r=>r?.status==='passed').length
+  const status=failed?.status??(records.every(r=>r?.status==='not_run')?'not_run':passed===records.length?'passed':running?(passed?'running':'pending'):'unfinished')
+  return {...group,status,passed,total:records.length}
+ })
 }
