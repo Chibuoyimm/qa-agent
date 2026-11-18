@@ -259,6 +259,9 @@ try {
   };
   const goodRelease = await createRelease('healthy-deployment', goodURL);
   const badRelease = await createRelease('faulty-deployment', badURL);
+  const releaseRun = await api(`/api/runs/${goodRelease.run.id}`);
+  assert.equal(releaseRun.release.deployment_key, goodRelease.deployment_key);
+  assert.deepEqual(releaseRun.release.repositories, goodRelease.repositories);
   assert.equal(goodRelease.run.status, 'passed');
   assert.equal(badRelease.run.status, 'failed');
   assert.equal(badRelease.run.gate, 'fail');
@@ -310,6 +313,10 @@ try {
     await page.getByRole('button', { name: 'Open workspace' }).click();
     await page.getByRole('combobox', { name: 'Current app', exact: true }).selectOption(healthy.project.id);
 
+    await page.goto(`${webURL}/#/results?project=${healthy.project.id}&run=${badRelease.run.id}`);
+    const deploymentCard = page.locator('section').filter({has:page.getByRole('heading',{name:'Deployment · faulty-deployment'})}).last();
+    await deploymentCard.getByRole('button',{name:/backend ·/}).click();
+    await page.getByText('sample/server.js',{exact:true}).first().waitFor();
     await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('button', { name: 'Settings', exact: true }).click();
     await page.getByRole('button', { name: 'Releases', exact: true }).click();
     const releaseDetails = page.getByRole('region', { name: 'Release details', exact: true });
@@ -330,7 +337,11 @@ try {
     observations.push({ name: 'Desktop/mobile Releases show full revisions and faulty findings; linked snapshots older than 100 imports remain reviewable after refresh', status: 'passed' });
 
     if (repositorySnapshot) {
-      await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('button', { name: 'Settings', exact: true }).click();
+      await page.goto(`${webURL}/#/results?project=${healthy.project.id}&run=${badRelease.run.id}`);
+    const deploymentCard = page.locator('section').filter({has:page.getByRole('heading',{name:'Deployment · faulty-deployment'})}).last();
+    await deploymentCard.getByRole('button',{name:/backend ·/}).click();
+    await page.getByText('sample/server.js',{exact:true}).first().waitFor();
+    await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('button', { name: 'Settings', exact: true }).click();
     await page.getByRole('button', { name: 'Releases', exact: true }).click();
       await releaseDetails.getByRole('heading', { name: 'faulty-deployment', exact: true }).waitFor();
       await releaseDetails.locator('article').filter({ hasText: 'frontend' }).getByRole('button', { name: 'Review saved snapshot', exact: false }).click();
@@ -362,7 +373,7 @@ try {
     await page.getByRole('button',{name:'Open workspace',exact:true}).click();
     await page.getByRole('combobox',{name:'Current app',exact:true}).selectOption(uiApp.id);
     await page.getByRole('button',{name:'Test',exact:true}).click();
-    await page.getByRole('button',{name:'Run all approved checks',exact:true}).click();
+    await page.getByRole('button',{name:/^Run all approved checks \(\d+\)$/}).click();
     await page.getByText('1 passed · 0 failed · 0 unverified · 0 unfinished',{exact:true}).waitFor({timeout:90000});
     await page.getByRole('button',{name:'Open results and evidence',exact:true}).click();
     await page.getByRole('heading',{name:'1 check · passed',exact:true}).waitFor();
@@ -394,12 +405,16 @@ try {
       assert.equal(route.request().headers()['x-qa-github-token'], 'synthetic-repo-token');
       await route.fulfill({ json: { snapshot: foundSnapshot, reason: 'Login implementation selected.', candidates: 4, excluded: 2 } });
     });
-    await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('button', { name: 'Settings', exact: true }).click();
-    await page.getByRole('button', { name: 'Repositories', exact: true }).click();
+    await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('button', { name: 'Test', exact: true }).click();
+    await page.getByRole('button', { name: 'New test request', exact: true }).click();
+    const testMessage = page.getByRole('textbox', {name:'Your message',exact:true});
+    await testMessage.fill('Test login');
+    await page.getByText('Review source context',{exact:true}).filter({visible:true}).click();
+    await page.getByRole('button',{name:'Find relevant source',exact:true}).click();
     assert.equal(await page.getByLabel('File selection', { exact: true }).filter({ visible: true }).inputValue(), 'agent');
     assert.equal(await page.getByLabel('Exact file paths', { exact: false }).filter({ visible: true }).count(), 0);
     await page.getByLabel('GitHub repository', { exact: false }).filter({ visible: true }).fill('fixture/app');
-    await page.getByRole('textbox', { name: 'Testing request *', exact: true }).fill('Test login');
+    assert.equal(await page.getByRole('textbox', { name: 'Testing request *', exact: true }).inputValue(),'Test login');
     await page.getByLabel('OpenAI API key', { exact: true }).filter({ visible: true }).fill('synthetic-model-key');
     await page.getByLabel('GitHub token', { exact: false }).filter({ visible: true }).fill('synthetic-repo-token');
     const searchConsent = page.getByRole('checkbox', { name: /repository file names and sizes/ });
@@ -417,11 +432,19 @@ try {
     await page.setViewportSize({ width: 390, height: 844 });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'File search mobile layout has no overflow');
     await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.getByRole('button',{name:'Review files in test request',exact:true}).click();
+    assert.equal(await testMessage.inputValue(),'Test login');
+    await page.getByText('hello',{exact:true}).filter({visible:true}).waitFor();
+    await page.getByRole('button',{name:'Use this reviewed snapshot',exact:true}).click();
+    await page.getByRole('button',{name:'Selected for proposal',exact:true}).waitFor();
+    assert.equal(await page.getByRole('checkbox',{name:/I agree to send this message/}).isChecked(),false);
+    await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('button', { name: 'Settings', exact: true }).click();
+    await page.getByRole('button',{name:'Repositories',exact:true}).click();
     await page.getByLabel('File selection', { exact: true }).filter({ visible: true }).selectOption('manual');
     await page.getByLabel('Exact file paths', { exact: false }).filter({ visible: true }).waitFor();
     await page.unroute('**/repositories/search');
     await page.unroute('**/repositories/synthetic-file-search');
-    observations.push({ name: 'Agent file search UI selects, clears credentials, and opens complete content for review (synthetic provider)', status: 'passed' });
+    observations.push({ name: 'Request text follows source search, keys clear, and returned files require review and sharing consent (synthetic provider)', status: 'passed' });
     await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('button', { name: 'Settings', exact: true }).click();
     await page.getByRole('button', { name: 'App & access', exact: true }).click();
     const proposal = { ...templates[0], name: 'Proposed independent revenue check', approved: false };

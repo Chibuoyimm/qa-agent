@@ -74,7 +74,7 @@ export async function verifyChatUI(page, api, healthyID, faultyID, scenario, wai
   assert.equal((await waitRun(selected.run_id)).status, 'passed');
   await page.locator('.chat-run-head .pill-passed').first().waitFor();
   await page.getByLabel('Your message', { exact: true }).filter({ visible: true }).fill('Run all approved checks');
-  assert.equal(await consent.isChecked(), false);
+  assert.equal(await consent.count(), 0, 'A local run command does not ask for model-sharing consent');
   await page.getByRole('button', { name: 'Send and run checks', exact: true }).click();
   await page.getByLabel('Your message', { exact: true }).filter({ visible: true }).waitFor({ state: 'visible' });
   for (let i = 0; i < 50; i++) {
