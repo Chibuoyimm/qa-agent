@@ -88,7 +88,7 @@ function ReviewPlan({ token, project, task, turn, scenarios, onApproved, onRun, 
   </section>
 }
 
-export default function TaskWorkspace({ token, project, taskId, journeys, scenarios, onTask, onChanged, onOpenRun, initialRunContext, attachedRun, onContextUsed, configRevision, initialJourney = '', defaultSetup = '', accessVerified, sourceToReview, onFindSource, onAIReady, onSettings, onAISettings }: { token: string; project: Project; taskId: string; journeys: Journey[]; scenarios: Scenario[]; onTask: (id: string, keepAttachment?: boolean) => void; onChanged: () => void; onOpenRun: (id: string) => void; initialRunContext: string; attachedRun: Run | null; accessVerified: boolean; sourceToReview: string; onFindSource: (prompt:string) => void; onContextUsed: () => void; configRevision: number; initialJourney?: string; defaultSetup?: string; onAIReady: (ready: 'ready' | 'per_request' | 'unavailable') => void; onSettings: () => void; onAISettings: () => void }) {
+export default function TaskWorkspace({ token, project, taskId, draftKey, journeys, scenarios, onTask, onChanged, onOpenRun, initialRunContext, attachedRun, onContextUsed, configRevision, initialJourney = '', defaultSetup = '', accessVerified, sourceToReview, onFindSource, onAIReady, onSettings, onAISettings }: { token: string; project: Project; taskId: string; draftKey: string; journeys: Journey[]; scenarios: Scenario[]; onTask: (id: string, keepAttachment?: boolean) => void; onChanged: () => void; onOpenRun: (id: string) => void; initialRunContext: string; attachedRun: Run | null; accessVerified: boolean; sourceToReview: string; onFindSource: (prompt:string) => void; onContextUsed: () => void; configRevision: number; initialJourney?: string; defaultSetup?: string; onAIReady: (ready: 'ready' | 'per_request' | 'unavailable') => void; onSettings: () => void; onAISettings: () => void }) {
   const [tasks, setTasks] = useState<TestingTask[]>([])
   const [task, setTask] = useState<TestingTask | null>(null)
   const [turns, setTurns] = useState<ChatTurn[]>([])
@@ -96,8 +96,6 @@ export default function TaskWorkspace({ token, project, taskId, journeys, scenar
   const [journey, setJourney] = useState(initialJourney)
   const [prefill, setPrefill] = useState<{text: string; id: number} | undefined>()
   const selectedJourneyName = journeys.find(j => j.id === initialJourney)?.name
-  const newDraftKey = `qa-task-draft:${project.id}:${initialJourney ? 'journey:'+initialJourney : initialRunContext && !taskId ? 'run:'+initialRunContext : 'new'}`
-  const draftKey = taskId ? `qa-task-draft:${project.id}:${taskId}` : newDraftKey
   useEffect(() => { setJourney(initialJourney);setJourneyName('');setPrefill(undefined) }, [initialJourney, taskId])
   const [journeyName, setJourneyName] = useState('')
   const [explore, setExplore] = useState(true)
@@ -148,7 +146,7 @@ export default function TaskWorkspace({ token, project, taskId, journeys, scenar
     if (currentTask.current) return currentTask.current
     const value = await api<TestingTask>(token, `${root}/tasks`, { method: 'POST', signal, body: JSON.stringify({ request_id: taskRequest.current, prompt, title: journeys.find(item => item.id === journey)?.name || journeyName.trim() || shortTitle(prompt), ...(journey ? { journey_id: journey } : { journey_name: journeyName.trim() || shortTitle(prompt) }) }) })
     if (!alive.current || signal?.aborted) throw new DOMException('Request interrupted', 'AbortError')
-    try { const draft = sessionStorage.getItem(newDraftKey); if (draft) sessionStorage.setItem(`qa-task-draft:${project.id}:${value.id}`, draft); sessionStorage.removeItem(newDraftKey) } catch { /* The task is still saved on the server. */ }
+    try { const draft = sessionStorage.getItem(draftKey); if (draft) sessionStorage.setItem(`qa-task-draft:${project.id}:${value.id}`, draft); sessionStorage.removeItem(draftKey) } catch { /* The task is still saved on the server. */ }
     currentTask.current = value.id; setTask(value); onTask(value.id,true); setRevision(value => value + 1); onChanged()
     taskRequest.current = newRequestID()
     return value.id
@@ -208,7 +206,7 @@ export default function TaskWorkspace({ token, project, taskId, journeys, scenar
     {progress && <div className="flow-progress" role="status"><LoaderCircle className="spin" size={18} />{progress}</div>}
 
     {initialRunContext && <div className="flow-card">Attached run · {attachedRun ? `${attachedRun.scenarios[0]?.name || 'App checks'} · ${attachedRun.status} · ${attachedRun.base_url} · ${formatDate(attachedRun.created_at)}` : initialRunContext}<button className="link-button" onClick={onContextUsed}>Remove run context</button></div>}
-    <AiProposals targetOrigin={project.base_url} token={token} projectId={project.id} configRevision={configRevision} onReady={onAIReady} onClose={() => {}} onReview={() => {}} conversation={{ prefill, disabled: busy || loading, draftKey, sourceToReview, initialPrompt: !taskId && selectedJourneyName ? `Test the ${selectedJourneyName}${/journey$/i.test(selectedJourneyName) ? '' : ' journey'}.` : !loading && task && turns.length === 0 ? task.request : undefined, onFindSource: prompt => onFindSource(prompt || task?.request || ''), onSettings: onAISettings, onAccessSetup: accessVerified ? undefined : async text => {
+    <AiProposals targetOrigin={project.base_url} token={token} projectId={project.id} configRevision={configRevision} onReady={onAIReady} onClose={() => {}} onReview={() => {}} conversation={{ prefill, disabled: busy || loading, draftKey, runContextId: initialRunContext, sourceToReview, initialPrompt: !taskId && selectedJourneyName ? `Test the ${selectedJourneyName}${/journey$/i.test(selectedJourneyName) ? '' : ' journey'}.` : !loading && task && turns.length === 0 ? task.request : undefined, onFindSource: prompt => onFindSource(prompt || task?.request || ''), onSettings: onAISettings, onAccessSetup: accessVerified ? undefined : async text => {
       if (text.trim() && !taskId) {
         setProgress('Saving your request…')
         try {await ensureTask(text.trim())} finally {setProgress('')}

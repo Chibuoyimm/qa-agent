@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useLayoutEffect, useId, useRef, useState, type FormEvent } from 'react'
 import {
   AlertCircle, ArrowRight, Check, CircleHelp, ExternalLink, Info, KeyRound, LoaderCircle,
   LockKeyhole, RefreshCw, ShieldCheck, Sparkles, Square, X,
@@ -21,6 +21,7 @@ function errorMessage(error: unknown, fallback: string): string {
 
 type ConversationComposer = {
   disabled: boolean
+  runContextId?: string
   draftKey?: string
   initialPrompt?: string
   onFindSource?: (prompt: string) => void
@@ -94,7 +95,10 @@ export default function AiProposals({ token, projectId, onClose, onReview, conve
   const loginPending = chatgpt?.login?.status === 'pending'
 
 
-  useEffect(() => {
+  // Sharing permission applies to the request and the exact report on screen.
+  useLayoutEffect(() => { setConsent(false) }, [conversation?.draftKey, conversation?.runContextId])
+
+  useLayoutEffect(() => {
     const key = conversation?.draftKey
     if (!key) return
     try {
@@ -105,7 +109,6 @@ export default function AiProposals({ token, projectId, onClose, onReview, conve
       setDiscoveryId(saved?.discovery ?? '')
       setJourney(saved?.journey??false);setFixtureId(saved?.fixtureId??'')
     } catch { setPrompt(conversation?.initialPrompt ?? '') }
-    setConsent(false)
     setProviderKey('')
     setWorkspaceId('')
     setRequestError('')

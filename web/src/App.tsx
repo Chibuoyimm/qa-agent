@@ -16,11 +16,37 @@ import { errorText, scenarioInput, runTitle } from './workspace'
 import './workspace.css'
 
 type Page = 'connect' | 'test' | 'coverage' | 'results' | 'settings'
-type Route = { page: Page; project: string; task: string; run: string; journey: string; context: string }
+const settingsTabs = ['App & access', 'AI connections', 'Repositories', 'App exploration', 'Releases', 'Earlier conversations'] as const
+type Setting = typeof settingsTabs[number]
+type Route = { page: Page; project: string; task: string; run: string; journey: string; context: string; draftRun: string; setting: Setting; snapshot: string }
+
 function readRoute(): Route {
   const [path, query] = location.hash.slice(1).split('?')
   const params = new URLSearchParams(query)
-  return { page: ['connect','test', 'coverage', 'results', 'settings'].includes(path.replace(/^\//, '')) ? path.replace(/^\//, '') as Page : 'test', project: params.get('project') || '', task: params.get('task') || '', run: params.get('run') || '', journey: params.get('journey') || '', context: params.get('context') || '' }
+  const page = path.replace(/^\//, '')
+  const task = params.get('task') || ''
+  const journey = params.get('journey') || ''
+  const context = params.get('context') || ''
+  // Existing links with an attached standalone run already own a separate draft.
+  const draftRun = task || journey ? '' : params.get('draftRun') || context
+  const setting = settingsTabs.find(tab => tab === params.get('tab')) ?? 'App & access'
+  return {
+    page: ['connect', 'test', 'coverage', 'results', 'settings'].includes(page) ? page as Page : 'test',
+    project: params.get('project') || '', task, journey, context, draftRun, setting,
+    run: params.get('run') || '',
+    snapshot: page === 'settings' && setting === 'Repositories' ? params.get('snapshot') || '' : '',
+  }
+}
+
+function routeHash(route: Route) {
+  const params = new URLSearchParams()
+  for (const key of ['project', 'task', 'run', 'context', 'journey'] as const) {
+    if (route[key]) params.set(key, route[key])
+  }
+  if (route.draftRun && route.draftRun !== route.context) params.set('draftRun', route.draftRun)
+  if (route.setting !== 'App & access') params.set('tab', route.setting)
+  if (route.snapshot) params.set('snapshot', route.snapshot)
+  return `#/${route.page}?${params}`
 }
 const nav = [{ page: 'test', label: 'Test', Icon: MessageSquare }, { page: 'coverage', label: 'Coverage', Icon: Grid2X2 }, { page: 'results', label: 'Results', Icon: ClipboardCheck }, { page: 'settings', label: 'Settings', Icon: Settings }] as const
 
@@ -43,30 +69,34 @@ export default function App() {
   const [name, setName] = useState('')
   const [url, setURL] = useState('')
   const [creating, setCreating] = useState(false)
-  const [setting, setSetting] = useState('App & access')
+  const setting = route.setting
   const [editor, setEditor] = useState<{ initial: ScenarioInput | null; source: 'new' | 'copy' | 'proposal' } | null>(null)
   const [standaloneAI, setStandaloneAI] = useState(false)
   const [savedScenario, setSavedScenario] = useState<Scenario | null>(null)
   const [returnedSource,setReturnedSource] = useState<{id:string;scope:string} | null>(null)
-  const [snapshot, setSnapshot] = useState('')
   const [discussedRun, setDiscussedRun] = useState<Run | null>(null)
   const [sourceRequest, setSourceRequest] = useState<{scope: string; prompt: string} | null>(null)
-  const draftScope = [route.project, route.task || route.context || route.journey || 'new'].join('/')
-  const currentSearch = sourceRequest?.scope === draftScope ? sourceRequest : null
+  let draftId = 'new'
+  if (route.task) draftId = route.task
+  else if (route.journey) draftId = 'journey:' + route.journey
+  else if (route.draftRun) draftId = 'run:' + route.draftRun
+  const draftKey = `qa-task-draft:${route.project}:${draftId}`
+  const currentSearch = !route.snapshot && sourceRequest?.scope === draftKey ? sourceRequest : null
   const changed = useCallback(() => setRevision(value => value + 1), [])
   const project = projects.find(item => item.id === route.project)
   function navigate(patch: Partial<Route>) {
     if (route.page === 'settings' && patch.page && patch.page !== 'settings') setConfigRevision(value => value + 1)
     const changingScope = patch.project !== undefined || patch.task !== undefined || patch.journey !== undefined
-    const next = { ...readRoute(), ...(changingScope ? {context: ''} : {}), ...patch }
-    const params = new URLSearchParams()
-    if (next.project) params.set('project', next.project)
-    if (next.task) params.set('task', next.task)
-    if (next.run) params.set('run', next.run)
-    if (next.context) params.set('context',next.context)
-    if (next.journey) params.set('journey', next.journey)
-    location.hash = `/${next.page}?${params}`
+    const next = { ...readRoute(), ...(changingScope ? { context: '', draftRun: '' } : {}), ...patch }
+    if (next.page !== 'settings' || next.setting !== 'Repositories' || patch.project !== undefined) next.snapshot = ''
+    location.hash = routeHash(next)
     setRoute(next)
+  }
+  function openSettings(setting: Setting) {
+    navigate({ page: 'settings', setting, snapshot: '' })
+  }
+  function snapshotHref(id: string) {
+    return routeHash({ ...route, page: 'settings', setting: 'Repositories', snapshot: id })
   }
   useEffect(() => { const update = () => setRoute(readRoute()); window.addEventListener('hashchange', update); return () => window.removeEventListener('hashchange', update) }, [])
   useEffect(() => {
@@ -78,15 +108,14 @@ export default function App() {
       setProjects(values); setLoaded(true)
       setRoute(previous => {
         if (values.some(item => item.id === previous.project) || !values.length) return previous
-        const next = { ...previous, project: values[0].id, context:'', task: '', run: '', journey: '' }
-        const params = new URLSearchParams({ project: next.project })
-        history.replaceState(null, '', `#/${next.page}?${params}`)
+        const next: Route = { ...previous, project: values[0].id, context: '', draftRun: '', task: '', run: '', journey: '', setting: 'App & access', snapshot: '' }
+        history.replaceState(null, '', routeHash(next))
         return next
       })
     }).catch(err => { if (!abort.signal.aborted) setError(errorText(err)) })
     return () => abort.abort()
   }, [token])
-  useEffect(() => { setScenarios([]); setJourneys([]); setRuns([]); setTasks([]); setAccess(null); setAIReady('unavailable'); setDiscussedRun(null);setSourceRequest(null);setSnapshot('');setReturnedSource(null); setEditor(null); setStandaloneAI(false); setSavedScenario(null) }, [route.project])
+  useEffect(() => { setScenarios([]); setJourneys([]); setRuns([]); setTasks([]); setAccess(null); setAIReady('unavailable'); setDiscussedRun(null);setSourceRequest(null);setReturnedSource(null); setEditor(null); setStandaloneAI(false); setSavedScenario(null) }, [route.project])
   useEffect(() => {
     if (!token || !project) return
     const abort = new AbortController()
@@ -106,11 +135,11 @@ export default function App() {
     event.preventDefault(); setCreating(true); setError('')
     try {
       const value = await api<Project>(token, '/api/projects', { method: 'POST', body: JSON.stringify({ name, base_url: url }) })
-      setProjects(previous => [...previous, value]); setName(''); setURL(''); navigate({ project: value.id, page: 'settings', task: '', run: '', journey: '' }); setSetting('App & access')
+      setProjects(previous => [...previous, value]); setName(''); setURL(''); navigate({ project: value.id, page: 'settings', setting: 'App & access', task: '', run: '', journey: '' })
     } catch (err) { setError(errorText(err)) } finally { setCreating(false) }
   }
   function openRun(id: string) { navigate({ page: 'results', run: id }) }
-  function investigate(run: Run) { setDiscussedRun(run); navigate({ page: 'test', context:run.id, journey:'',task: run.task_id || '', run: '' }) }
+  function investigate(run: Run) { setDiscussedRun(run); navigate({ page: 'test', context:run.id, draftRun: run.task_id ? '' : run.id, journey:'',task: run.task_id || '', run: '' }) }
 
   if (!token) return <div className="auth-page"><div className="auth-content"><div className="brand brand-auth"><span className="brand-mark"><Activity size={25} /></span><span>qa<span className="brand-accent">agent</span></span></div><div className="auth-card"><div className="eyebrow">YOUR TEST WORKSPACE</div><h1>Know what works.</h1><p>Describe what matters, review the checks, and see the evidence from your app.</p><form onSubmit={event => { event.preventDefault(); setToken(tokenInput.trim()); setTokenInput('') }}><label className="field-label" htmlFor="api-token">Workspace access token</label><input id="api-token" type="password" autoComplete="off" required value={tokenInput} onChange={event => setTokenInput(event.target.value)} /><button className="button button-primary auth-submit" disabled={!tokenInput.trim()}>Open workspace <ArrowRight size={17} /></button></form><p className="field-help">Your operator provides this token. It stays in this tab’s memory and clears on reload.</p></div></div></div>
   return <div className="workspace-shell"><aside className="workspace-nav"><a className="workspace-brand" href={`#/test?project=${route.project}`}><Activity size={25} /><strong>qa<span>agent</span></strong></a><label className="workspace-switch">APP<select value={route.project} aria-label="Current app" onChange={event => { if (event.target.value === '__new') { navigate({page:'connect'}); return } navigate({ project: event.target.value, task: '', run: '', journey: '' }) }}>{!projects.length && <option value="">{loaded ? 'No apps yet' : 'Loading apps…'}</option>}{projects.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}<option value="__new">+ Connect another app</option></select></label><button className="link-button add-app" onClick={() => navigate({page:'connect'})}><Plus size={14} />Add app</button><nav aria-label="Main navigation">{nav.map(({ page, label, Icon }) => <button key={page} className={route.page === page ? 'active' : ''} aria-current={route.page === page ? 'page' : undefined} onClick={() => navigate({ page })}><Icon size={18} />{label}</button>)}</nav><div className="workspace-nav-foot"><ShieldCheck size={17} /><p>Evidence for the checks you choose.</p><button className="link-button" onClick={() => { setToken(''); setLoaded(false); setProjects([]) }}>Lock workspace</button></div></aside><main className="workspace-content">
@@ -118,17 +147,17 @@ export default function App() {
     {!loaded && !error && <p>Connecting to your workspace…</p>}
     {(newApp || (loaded && projects.length === 0)) && <div className="flow-page setup-page"><div className="eyebrow">CONNECT YOUR APP</div><h1>Where should we test?</h1><p>Connect an app you control. We’ll check its access and explore its pages before you review any test plan.</p><form className="flow-card" onSubmit={event => void createApp(event)}><label htmlFor="app-name">App name</label><input id="app-name" required maxLength={200} value={name} placeholder="e.g. Acme staging" onChange={event => setName(event.target.value)} /><label htmlFor="app-url">App URL</label><input id="app-url" type="url" required placeholder="https://staging.example.com" value={url} onChange={event => setURL(event.target.value)} /><p className="muted">Use the app’s origin, without a page path. Your operator must allow it on the server and browser worker.</p><div className="flow-row">{projects.length > 0 && <button className="button button-outline" type="button" onClick={() => navigate({page:'test'})}>Cancel</button>}<button className="button button-primary" disabled={creating}>{creating ? 'Connecting…' : 'Connect app'}</button></div></form></div>}
     {project && !newApp && <>
-      <section hidden={route.page !== 'test'}><TaskWorkspace key={project.id} token={token} project={project} taskId={route.task} journeys={journeys} scenarios={scenarios} onTask={(id, keepAttachment) => navigate({ task: id, context: keepAttachment ? route.context : '', journey: id ? route.journey : '', run: '' })} onChanged={changed} onOpenRun={openRun} initialRunContext={route.context} attachedRun={runs.find(r => r.id === route.context) ?? (discussedRun?.id === route.context ? discussedRun : null)} onContextUsed={() => {if(readRoute().context === route.context) navigate({context:''})}} configRevision={configRevision} initialJourney={route.journey} accessVerified={Boolean(access?.discovery_id)} defaultSetup={access?.setup_scenario_id} sourceToReview={returnedSource?.scope === draftScope ? returnedSource.id : ''} onAIReady={setAIReady} onFindSource={prompt => {setSnapshot('');setSourceRequest({scope:draftScope,prompt});setSetting('Repositories');navigate({page:'settings'})}} onAISettings={() => {navigate({page:'settings'});setSetting('AI connections')}} onSettings={() => {navigate({page:'settings'});setSetting('App & access')}} /></section>
+      <section hidden={route.page !== 'test'}><TaskWorkspace key={project.id} token={token} project={project} taskId={route.task} draftKey={draftKey} journeys={journeys} scenarios={scenarios} onTask={(id, keepAttachment) => navigate({ task: id, context: keepAttachment ? route.context : '', journey: id ? route.journey : '', run: '' })} onChanged={changed} onOpenRun={openRun} initialRunContext={route.context} attachedRun={runs.find(r => r.id === route.context) ?? (discussedRun?.id === route.context ? discussedRun : null)} onContextUsed={() => {if(readRoute().context === route.context) navigate({context:''})}} configRevision={configRevision} initialJourney={route.journey} accessVerified={Boolean(access?.discovery_id)} defaultSetup={access?.setup_scenario_id} sourceToReview={returnedSource?.scope === draftKey ? returnedSource.id : ''} onAIReady={setAIReady} onFindSource={prompt => {setSourceRequest({scope:draftKey,prompt});openSettings('Repositories')}} onAISettings={() => openSettings('AI connections')} onSettings={() => openSettings('App & access')} /></section>
       {route.page === 'coverage' && <Coverage key={project.id} token={token} project={project} revision={revision} onChanged={changed} onOpenRun={openRun} onTest={journey => navigate({page:'test',task:'',run:'',journey})} />}
-      {route.page === 'results' && (route.run ? <RunReport token={token} id={route.run} onSnapshot={id => {setSnapshot(id);setSourceRequest(null);setSetting('Repositories');navigate({page:'settings'})}} onBack={() => navigate({ run: '' })} onOpenRun={openRun} onInvestigate={investigate} onChanged={changed} title={runs.find(r=>r.id===route.run) ? runTitle(runs.find(r=>r.id===route.run)!,tasks,journeys) : undefined} /> : <RunHistory runs={runs} tasks={tasks} journeys={journeys} onOpen={openRun} onRefresh={changed} onTest={() => navigate({page:'test',run:''})} />)}
-      {route.page === 'settings' && <div className="flow-page settings-page"><div className="page-heading"><div><div className="eyebrow">SETTINGS</div><h1>App connections & access</h1><p>Set up once, then return to Test to plan and run checks.</p></div></div><div className="flow-tabs settings-tabs">{['App & access', 'AI connections', 'Repositories', 'App exploration', 'Releases'].map(item => <button className={setting === item ? 'active' : ''} key={item} onClick={() => { setSourceRequest(null); if (setting === 'AI connections') setConfigRevision(value => value + 1); setSetting(item) }}>{item}</button>)}</div>
-        {setting === 'App & access' && <><AppReadiness key={project.id} token={token} projectId={project.id} scenarios={scenarios} access={access} aiReady={aiReady} onVerificationStarted={changed} handoffURL={location.href} projectName={project.name} target={project.base_url} onAI={() => setSetting('AI connections')}  onTest={() => navigate({page:'test'})} /><details className="flow-card"><summary>Advanced check editor ({scenarios.length} checks)</summary><p>For engineers who want to define exact browser steps or copy an existing check. Copies are separate checks in Coverage.</p><div className="flow-row"><button className="button button-outline" onClick={() => setEditor({ initial: null, source: 'new' })}>Add a check manually</button><button className="button button-outline" onClick={() => setStandaloneAI(true)}>Ask AI to propose</button></div>{scenarios.map(s => <div className="advanced-check" key={s.id}><span>{s.name} · {s.approved ? 'Approved' : 'Draft'}</span><button className="link-button" onClick={() => setEditor({ initial: scenarioInput(s), source: 'copy' })}>Review a copy</button></div>)}</details><section className="flow-card"><h2>Earlier conversations</h2><p>Your conversations from the previous workspace are still available.</p><button className="link-button" onClick={() => setSetting('Earlier conversations')}>Open earlier conversations</button></section></>}
+      {route.page === 'results' && (route.run ? <RunReport token={token} id={route.run} snapshotHref={snapshotHref} onBack={() => navigate({ run: '' })} onOpenRun={openRun} onInvestigate={investigate} onChanged={changed} title={runs.find(r=>r.id===route.run) ? runTitle(runs.find(r=>r.id===route.run)!,tasks,journeys) : undefined} /> : <RunHistory runs={runs} tasks={tasks} journeys={journeys} onOpen={openRun} onRefresh={changed} onTest={() => navigate({page:'test',run:''})} />)}
+      {route.page === 'settings' && <div className="flow-page settings-page"><div className="page-heading"><div><div className="eyebrow">SETTINGS</div><h1>App connections & access</h1><p>Set up once, then return to Test to plan and run checks.</p></div></div><div className="flow-tabs settings-tabs">{settingsTabs.filter(item => item !== 'Earlier conversations').map(item => <button className={setting === item ? 'active' : ''} key={item} onClick={() => { setSourceRequest(null); if (setting === 'AI connections') setConfigRevision(value => value + 1); openSettings(item) }}>{item}</button>)}</div>
+        {setting === 'App & access' && <><AppReadiness key={project.id} token={token} projectId={project.id} scenarios={scenarios} access={access} aiReady={aiReady} onVerificationStarted={changed} handoffURL={location.href} projectName={project.name} target={project.base_url} onAI={() => openSettings('AI connections')}  onTest={() => navigate({page:'test'})} /><details className="flow-card"><summary>Advanced check editor ({scenarios.length} checks)</summary><p>For engineers who want to define exact browser steps or copy an existing check. Copies are separate checks in Coverage.</p><div className="flow-row"><button className="button button-outline" onClick={() => setEditor({ initial: null, source: 'new' })}>Add a check manually</button><button className="button button-outline" onClick={() => setStandaloneAI(true)}>Ask AI to propose</button></div>{scenarios.map(s => <div className="advanced-check" key={s.id}><span>{s.name} · {s.approved ? 'Approved' : 'Draft'}</span><button className="link-button" onClick={() => setEditor({ initial: scenarioInput(s), source: 'copy' })}>Review a copy</button></div>)}</details><section className="flow-card"><h2>Earlier conversations</h2><p>Your conversations from the previous workspace are still available.</p><button className="link-button" onClick={() => openSettings('Earlier conversations')}>Open earlier conversations</button></section></>}
         {setting === 'App & access' && standaloneAI && <AiProposals token={token} projectId={project.id} onClose={() => setStandaloneAI(false)} onReview={input => setEditor({ initial: input, source: 'proposal' })} />}
         {setting === 'Earlier conversations' && <ChatWorkspace token={token} project={project} scenarios={scenarios} savedScenario={savedScenario} onReview={input => setEditor({ initial: input, source: 'proposal' })} onOpenRun={openRun} onRunQueued={changed} />}
         {setting === 'AI connections' && <AiProposals key={`settings-${project.id}`} token={token} projectId={project.id} settingsOnly onReady={setAIReady} onClose={() => {}} onReview={() => {}} />}
-        {setting === 'Repositories' && <RepositorySnapshots token={token} projectId={project.id} focusSnapshotId={snapshot} requestPrompt={currentSearch?.prompt} onReturn={!currentSearch ? undefined : id => {setReturnedSource({id,scope:currentSearch.scope});setSourceRequest(null);navigate({page:'test'})}} />}
+        {setting === 'Repositories' && <RepositorySnapshots token={token} projectId={project.id} focusSnapshotId={route.snapshot} requestPrompt={currentSearch?.prompt} onReturn={!currentSearch ? undefined : id => {setReturnedSource({id,scope:currentSearch.scope});setSourceRequest(null);navigate({page:'test'})}} />}
         {setting === 'App exploration' && <Discoveries token={token} projectId={project.id} approvedScenarios={scenarios.filter(s => s.approved)} />}
-        {setting === 'Releases' && <Releases token={token} projectId={project.id} onOpenSnapshot={id => { setSnapshot(id); setSetting('Repositories') }} />}
+        {setting === 'Releases' && <Releases token={token} projectId={project.id} snapshotHref={snapshotHref} />}
       </div>}
     </>}
   </main>{editor && project && <ScenarioEditor token={token} projectId={project.id} initial={editor.initial} source={editor.source} onClose={() => setEditor(null)} onSaved={scenario => { setSavedScenario(scenario); changed() }} />}</div>

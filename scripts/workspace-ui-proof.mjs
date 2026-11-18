@@ -3,6 +3,55 @@
 import assert from 'node:assert/strict';
 import { resolve } from 'node:path';
 
+export async function verifyReleaseDiscussionAndSource(page, release, apiToken) {
+  const reportURL = new URL(`#/results?project=${release.project_id}&run=${release.run.id}`, page.url()).href;
+  const message = page.getByRole('textbox', {name: 'Your message', exact: true});
+  const general = 'Check the refund window on the account page.';
+  const question = 'Why did this release include refunded orders?';
+  async function unlock(tab) {
+    await tab.getByLabel('Workspace access token', {exact: true}).fill(apiToken);
+    await tab.getByRole('button', {name: 'Open workspace', exact: true}).click();
+  }
+  assert.ok(!release.run.task_id, 'Use a release run without an existing request');
+  await page.getByRole('button', {name: 'Test', exact: true}).click();
+  await message.fill(general);
+  await page.goto(reportURL);
+  await page.getByRole('button', {name: 'Discuss these results in Test'}).click();
+  await message.fill(question);
+  await page.getByRole('button', {name: 'Remove run context'}).click();
+  assert.equal(await message.inputValue(), question, 'Detaching only removes the report');
+  await page.reload();
+  await unlock(page);
+  assert.equal(await message.inputValue(), question, 'The detached draft can be resumed after unlock');
+  assert.equal(await page.getByRole('button', {name: 'Remove run context'}).count(), 0);
+  await page.getByRole('button', {name: 'New test request'}).click();
+  assert.equal(await message.inputValue(), general, 'The separate general draft survives');
+
+  const source = release.repositories.find(repo => repo.role === 'backend');
+  async function verifyFiles(tab) {
+    const article = tab.locator('.repository-item:visible').filter({has: tab.locator('.repository-files')});
+    await article.locator(`code[title="${source.commit_sha}"]`).waitFor();
+    assert.deepEqual((await article.locator('.repository-file code').allTextContents()).sort(), [...source.paths].sort());
+  }
+  await page.goto(reportURL);
+  const link = page.getByRole('link', {name: /^backend ·/});
+  const sharedURL = await link.evaluate(el => el.href);
+  assert.equal(new URLSearchParams(new URL(sharedURL).hash.split('?')[1]).get('snapshot'), source.snapshot_id);
+  await link.click();
+  await verifyFiles(page);
+  await page.reload();
+  await unlock(page);
+  await verifyFiles(page);
+  const visitor = await page.context().browser().newContext();
+  try {
+    const tab = await visitor.newPage();
+    await tab.goto(sharedURL);
+    await unlock(tab);
+    await verifyFiles(tab);
+  } finally { await visitor.close(); }
+  return {name: 'Standalone report detaches without replacing either draft. The pinned deployment files reopen after reload and in a fresh browser session.', status: 'passed'};
+}
+
 export async function verifyWorkspaceUI(page, api, templates, goodURL, badURL, waitRun, evidence, apiToken, insertFixtureTurn) {
   await page.unroute('**/api/ai/config');
   await page.route('**/api/ai/config', route => route.fulfill({ json: {provider:'openai',models:['workspace-fixture'],managed_available:false,byok_available:true} }));
@@ -180,6 +229,28 @@ export async function verifyWorkspaceUI(page, api, templates, goodURL, badURL, w
   assert.equal(saved.approvals.length,1);
   assert.equal(saved.approvals[0].scenario_ids.length,2);
   assert.equal(calls,3,'Only explicit drafting requests call a model; run, review, recheck and reload do not');
+  const sharing = page.getByRole('checkbox', {name: /I agree to send this message/});
+  const draft = page.getByRole('button', {name: 'Draft test plan', exact: true});
+  const key = page.getByLabel('OpenAI API key', {exact: true}).filter({visible: true});
+  await page.getByRole('textbox', {name: 'Your message', exact: true}).fill('Explain this revenue result.');
+  if (!await key.isVisible()) await page.locator('.chat-model-settings:visible > summary').click();
+  await key.fill('workspace-transient-key');
+  await sharing.check();
+  assert.ok(await draft.isEnabled());
+  // Attach one run, then replace it with another from the very same request.
+  for (const run of [first, next]) {
+    await page.goto(new URL(`#/results?project=${app.id}&task=${taskID}&run=${run.id}`, page.url()).href);
+    await page.getByRole('button', {name: 'Discuss these results in Test'}).click();
+    await page.getByRole('button', {name: 'Remove run context'}).waitFor();
+    assert.equal(await sharing.isChecked(), false, 'Each new attachment needs fresh consent');
+    assert.ok(await draft.isDisabled());
+    await sharing.check();
+    assert.ok(await draft.isEnabled());
+  }
+  await page.getByRole('button', {name: 'Remove run context'}).click();
+  assert.equal(await sharing.isChecked(), false, 'Removing the attachment also clears consent');
+  assert.ok(await draft.isDisabled());
+  assert.equal(calls, 3, 'Changing attachments never sends a model request');
   await page.getByRole('button',{name:'Coverage',exact:true}).click();
   const draftText='Check the refund window after cancellation';
   await page.getByRole('button',{name:'Test',exact:true}).click();

@@ -1,4 +1,4 @@
-import { verifyWorkspaceUI } from './workspace-ui-proof.mjs';
+import { verifyReleaseDiscussionAndSource, verifyWorkspaceUI } from './workspace-ui-proof.mjs';
 import { openStandaloneProposals } from './workspace-ui-helpers.mjs';
 // Disposable PostgreSQL + real API + real Chromium. No customer accounts or model calls.
 import assert from 'node:assert/strict';
@@ -313,10 +313,7 @@ try {
     await page.getByRole('button', { name: 'Open workspace' }).click();
     await page.getByRole('combobox', { name: 'Current app', exact: true }).selectOption(healthy.project.id);
 
-    await page.goto(`${webURL}/#/results?project=${healthy.project.id}&run=${badRelease.run.id}`);
-    const deploymentCard = page.locator('section').filter({has:page.getByRole('heading',{name:'Deployment · faulty-deployment'})}).last();
-    await deploymentCard.getByRole('button',{name:/backend ·/}).click();
-    await page.getByText('sample/server.js',{exact:true}).first().waitFor();
+    observations.push(await verifyReleaseDiscussionAndSource(page, badRelease, apiToken));
     await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('button', { name: 'Settings', exact: true }).click();
     await page.getByRole('button', { name: 'Releases', exact: true }).click();
     const releaseDetails = page.getByRole('region', { name: 'Release details', exact: true });
@@ -330,21 +327,16 @@ try {
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'Mobile release details have no horizontal page overflow');
     await page.screenshot({ path: resolve(evidence, 'release-mobile.png'), fullPage: true });
     await page.setViewportSize({ width: 1440, height: 1000 });
-    await releaseDetails.locator('article').filter({ hasText: 'backend' }).getByRole('button', { name: 'Review saved snapshot', exact: false }).click();
+    await releaseDetails.locator('article').filter({ hasText: 'backend' }).getByRole('link', { name: 'Review saved snapshot', exact: false }).click();
     await page.getByText('sample/server.js', { exact: true }).first().waitFor();
     await page.getByRole('button', { name: 'Refresh', exact: true }).click();
     await page.getByText('sample/server.js', { exact: true }).first().waitFor();
     observations.push({ name: 'Desktop/mobile Releases show full revisions and faulty findings; linked snapshots older than 100 imports remain reviewable after refresh', status: 'passed' });
 
     if (repositorySnapshot) {
-      await page.goto(`${webURL}/#/results?project=${healthy.project.id}&run=${badRelease.run.id}`);
-    const deploymentCard = page.locator('section').filter({has:page.getByRole('heading',{name:'Deployment · faulty-deployment'})}).last();
-    await deploymentCard.getByRole('button',{name:/backend ·/}).click();
-    await page.getByText('sample/server.js',{exact:true}).first().waitFor();
-    await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('button', { name: 'Settings', exact: true }).click();
-    await page.getByRole('button', { name: 'Releases', exact: true }).click();
+      await page.getByRole('button', {name: 'Releases', exact: true}).click();
       await releaseDetails.getByRole('heading', { name: 'faulty-deployment', exact: true }).waitFor();
-      await releaseDetails.locator('article').filter({ hasText: 'frontend' }).getByRole('button', { name: 'Review saved snapshot', exact: false }).click();
+      await releaseDetails.locator('article').filter({ hasText: 'frontend' }).getByRole('link', { name: 'Review saved snapshot', exact: false }).click();
       await page.getByText('sample/scenarios.json', { exact: true }).waitFor();
       await page.screenshot({ path: resolve(evidence, 'repository-context.png'), fullPage: true });
     }
