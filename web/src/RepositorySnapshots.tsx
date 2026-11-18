@@ -61,7 +61,7 @@ export default function RepositorySnapshots({ token, projectId, focusSnapshotId 
 
   function cancel() { generation.current += 1; controller.current?.abort(); controller.current = null; setRepositoryToken(''); setSyncing(false); setError('Import cancelled.') }
 
-  return <><div className="page-heading"><div><div className="eyebrow">REPOSITORY CONTEXT</div><h1>Repository snapshots</h1><p>Import selected source files as fixed, reviewable context for AI proposals.</p></div></div>
+  return <><div className="page-heading"><div><h2>Repository snapshots</h2><p>Import selected source files as fixed, reviewable context for AI proposals.</p></div></div>
     <div className="repository-layout"><div className="panel repository-sync"><div className="panel-kicker">IMPORT SOURCE</div><h2>Find files for your checks</h2><p className="field-help">Describe what to test and let the agent choose relevant source files. Imports do not execute repository code.</p>
       <label className="field-label" htmlFor="repository-mode">File selection</label><select id="repository-mode" value={mode} disabled={syncing} onChange={event => { setMode(event.target.value as 'agent' | 'manual'); setRepositoryToken(''); setError(''); setSuccess(''); setFoundId('') }}><option value="agent">Let the agent find files</option><option value="manual">Choose exact files manually</option></select>
       <form onSubmit={event => { if (mode === 'manual') void sync(event); else event.preventDefault() }}>

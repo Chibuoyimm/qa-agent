@@ -85,7 +85,7 @@ export default function Releases({ token, projectId, snapshotHref }: {
   const incomplete = run ? Math.max(0, run.scenarios.length - (run.results?.filter(result=>result.status!=='running').length ?? 0)) : 0
 
   return <>
-    <div className="page-heading"><div><div className="eyebrow">DEPLOYMENT PROOF</div><h1>Releases</h1><p>See the deployed target, exact source revisions, and the checks behind each gate.</p></div>
+    <div className="page-heading"><div><h2>Releases</h2><p>See the deployed target, exact source revisions, and the checks behind each gate.</p></div>
       <button className="button button-outline" onClick={refresh} aria-label="Refresh releases"><RefreshCw size={16} />Refresh</button></div>
     {error && <div className="error-banner" role="alert"><AlertCircle size={18} /><span>{error}. Results may be out of date.</span><button className="text-button" onClick={refresh}>Retry</button></div>}
     {loading ? <div className="loading-state"><LoaderCircle size={20} className="spin" />Loading releases…</div>

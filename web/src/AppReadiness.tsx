@@ -110,6 +110,6 @@ export default function AppReadiness({ token, projectId, projectName, target, ha
     </section>}
     <div className="readiness-next"><strong>{aiReady === 'per_request' ? 'AI key required per request' : aiReady === 'ready' ? 'AI ready' : 'Choose an AI connection'}</strong>
       <button className="link-button" onClick={onAI}>Manage AI connection</button></div>
-    <button className="button button-primary" onClick={onTest}>Return to test request</button>
+    <button className="button button-outline" onClick={onTest}>Return to test request</button>
   </section>
 }

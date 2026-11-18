@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ArrowRight, LoaderCircle, Play, Plus, Sparkles } from 'lucide-react'
+import { ArrowRight, LoaderCircle, Play, Plus, Sparkles, History, MessageSquareText } from 'lucide-react'
 import JourneyProgress from './JourneyProgress'
 import PlanningRecovery from './PlanningRecovery'
 import AiProposals from './AiProposals'
@@ -93,6 +93,13 @@ export default function TaskWorkspace({ token, project, taskId, draftKey, journe
   const [task, setTask] = useState<TestingTask | null>(null)
   const [turns, setTurns] = useState<ChatTurn[]>([])
   const [hasOlder, setHasOlder] = useState(false)
+  const [showHistory, setShowHistory] = useState(false)
+  const historyPanel = useRef<HTMLElement>(null)
+  const historyToggle = useRef<HTMLButtonElement>(null)
+  const workspaceHeading = useRef<HTMLHeadingElement>(null)
+  useEffect(() => {
+    if (showHistory) (historyPanel.current?.querySelector<HTMLButtonElement>('button:enabled') ?? historyPanel.current)?.focus()
+  }, [showHistory])
   const [journey, setJourney] = useState(initialJourney)
   const [prefill, setPrefill] = useState<{text: string; id: number} | undefined>()
   const selectedJourneyName = journeys.find(j => j.id === initialJourney)?.name
@@ -112,6 +119,11 @@ export default function TaskWorkspace({ token, project, taskId, draftKey, journe
   currentTask.current = taskId
   const taskRequest = useRef(newRequestID())
   const busy = Boolean(progress || turns.some(turn => turn.status === 'pending'))
+  useEffect(() => {
+    if (showHistory && document.activeElement === historyPanel.current) {
+      historyPanel.current?.querySelector<HTMLButtonElement>('button:enabled')?.focus()
+    }
+  }, [showHistory, tasks.length, busy])
   const root = `/api/projects/${project.id}`
   useEffect(() => {
     const abort = new AbortController()
@@ -200,7 +212,12 @@ export default function TaskWorkspace({ token, project, taskId, draftKey, journe
       setTurns(previous => [...page.turns.filter(turn => !previous.some(item => item.id === turn.id)), ...previous]); setHasOlder(page.has_older)
     } catch (err) { setError(errorText(err)) }
   }
-  return <div className="testing-layout"><aside className="task-list"><button className="button button-primary" disabled={busy} onClick={() => { onTask(''); taskRequest.current = newRequestID() }}><Plus size={16} />New test request</button><h3>Recent requests</h3>{tasks.length === 0 && <p>Your testing conversations will appear here.</p>}{tasks.map(item => <button className={`task-link ${taskId === item.id ? 'selected' : ''}`} disabled={busy} key={item.id} onClick={() => onTask(item.id)}><span>{item.title}</span><small>{formatDate(item.created_at)}</small></button>)}</aside><div className="testing-main"><div className="page-heading"><div><div className="eyebrow">TEST WORKSPACE</div><h1>{journeys.find(item => item.id === task?.journey_id)?.name || task?.title || 'What would you like to test?'}</h1><p>{project.name} · {project.base_url}</p></div></div>
+  return <div className="flow-page testing-layout">
+    <header className="page-heading testing-heading"><div><h1 ref={workspaceHeading} tabIndex={-1}>{journeys.find(item => item.id === task?.journey_id)?.name || task?.title || 'What would you like to test?'}</h1></div>
+      <div className="heading-actions"><button ref={historyToggle} className="button button-outline history-toggle" aria-expanded={showHistory} aria-controls="recent-requests" onClick={() => setShowHistory(!showHistory)}><History size={16}/>Recent requests</button>
+        <button className="button button-outline" disabled={busy} onClick={() => {onTask(''); setShowHistory(false); taskRequest.current = newRequestID()}}><Plus size={16}/>New test request</button></div>
+    </header>
+    <div className="testing-main">
     {error && <div className="error-banner" role="alert">{error}</div>}{loading && <p role="status">Loading saved conversation…</p>}
     <div className="chat-thread">{hasOlder && <button className="link-button" onClick={() => void older()}>Load earlier messages</button>}{turns.map(turn => <article className="chat-exchange" key={turn.id}><div className="chat-user-message"><small>You · {formatDate(turn.created_at)}</small>{turn.proposal?.scenarios.length && turn.prompt.length > 450 ? <details className="request-preview"><summary>{turn.prompt.slice(0,150).replace(/\s+\S*$/, '')}… <span>Read full request</span></summary><p>{turn.prompt}</p></details> : <p>{turn.prompt}</p>}</div><div className="chat-agent-message"><div className="chat-agent-label"><Sparkles size={17} /><strong>QA Agent</strong>{turn.proposal && <small>{turn.proposal.model}</small>}</div>{turn.status === 'error' ? <PlanningRecovery turn={turn} disabled={busy} onRetry={text => setPrefill({text, id: Date.now()})} onSettings={onAISettings} /> : <p>{turn.status === 'pending' ? 'Preparing your test plan…' : turn.reply}</p>}{turn.proposal && <>{turn.proposal.questions.length > 0 && <div className="chat-questions"><strong>A few details before we test</strong><ol>{turn.proposal.questions.map((question, i) => <li key={i}>{question}</li>)}</ol></div>}{turn.proposal.assumptions.length > 0 && <details className="chat-assumptions"><summary>Assumptions to review ({turn.proposal.assumptions.length})</summary><ul>{turn.proposal.assumptions.map((item, i) => <li key={i}>{item}</li>)}</ul></details>}{task && <ReviewPlan mode={mode} onMode={setMode} token={token} project={project} task={task} turn={turn} scenarios={scenarios} busy={busy} onApproved={() => refresh(task.id)} onRevise={text => setPrefill({text, id: Date.now()})} onRun={(ids, requestID) => launch('Run the reviewed plan', 'selected', undefined, ids, requestID)} />}{(turn.proposal.discovery_id || turn.proposal.repository_snapshots?.length) ? <details className="chat-assumptions"><summary>Context used for this plan</summary>{turn.proposal.discovery_id && <p>Observed app pages from discovery {turn.proposal.discovery_id.slice(0, 8)}</p>}{turn.proposal.repository_snapshots?.map(source => <p key={source.id}>{source.repository} · {source.role} · {source.commit_sha.slice(0, 12)}</p>)}</details> : null}</>}{turn.run_id && <RunCard token={token} id={turn.run_id} onOpen={onOpenRun} />}</div></article>)}</div>
     {progress && <div className="flow-progress" role="status"><LoaderCircle className="spin" size={18} />{progress}</div>}
@@ -213,9 +230,17 @@ export default function TaskWorkspace({ token, project, taskId, draftKey, journe
       }
       onSettings()
     }, taskContext: true, send, command: (prompt, action, signal) => launch(prompt, action, signal) }} />
-    <div className="flow-row workspace-footer"><p>New checks run only after approval. A full check runs the app’s existing approved checks.</p><button className="link-button" disabled={busy || !scenarios.some(s => s.approved)} onClick={() => void launch('Run all approved checks', 'all_approved').catch(err => setError(errorText(err)))}>Run all approved checks ({scenarios.filter(s => s.approved).length}) <Play size={14} /></button></div>
+    <div className="flow-row workspace-footer"><p>Run the app’s existing checks with their approved expectations.</p><button className="link-button" disabled={busy || !scenarios.some(s => s.approved)} onClick={() => void launch('Run all approved checks', 'all_approved').catch(err => setError(errorText(err)))}>Run all approved checks ({scenarios.filter(s => s.approved).length}) <Play size={14} /></button></div>
     {!taskId && <details className="flow-card journey-options"><summary>Journey · {journeys.find(item => item.id === journey)?.name || journeyName || 'New journey'}</summary><div className="task-options"><label>Journey<select value={journey} onChange={event => setJourney(event.target.value)}><option value="">New journey</option>{journeys.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>{!journey && <label>Journey name <span className="muted">(optional)</span><input maxLength={200} placeholder="e.g. Checkout" value={journeyName} onChange={event => setJourneyName(event.target.value)} /></label>}</div></details>}
     <details className="flow-card exploration-options"><summary>App access & exploration</summary><label className="inline-check"><input type="checkbox" checked={explore} disabled={busy} onChange={event => setExplore(event.target.checked)} />Explore up to 3 app pages before planning</label><p>Discovery follows same-origin links. Its observations help find controls; your requirements establish the expected outcome.</p><label>Sign-in or access setup<select value={setup} disabled={busy} onChange={event => { setSetup(event.target.value) }}><option value="">No setup (public app)</option>{scenarios.filter(s => s.approved && !journeySummary(s.steps).phases.length && !journeySummary(s.steps).fixture).map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label><p>Your verified default is reused for new requests. <button className="link-button" onClick={onSettings}>Check access or change setup</button></p><label>Run mode<select value={mode} disabled={busy} onChange={event => setMode(event.target.value as typeof mode)}><option value="advisory">Advisory</option><option value="blocking">Blocking gate</option></select></label><p>Advisory reports outcomes. A blocking run returns a failed gate when a required check fails or cannot complete.</p></details>
 
-  </div></div>
+  </div>
+    <aside id="recent-requests" aria-label="Recent requests" ref={historyPanel} tabIndex={-1} onKeyDown={event => {
+      if (event.key === 'Escape' && showHistory) {setShowHistory(false); historyToggle.current?.focus()}
+    }} className={`task-list ${showHistory ? 'history-open' : ''}`}>
+      <h2><History size={17} aria-hidden="true"/>Recent requests</h2>
+      {tasks.length === 0 && <p>Saved test requests will appear here.</p>}
+      <div className="task-links">{tasks.map(item => <button className={`task-link ${taskId === item.id ? 'selected' : ''}`} aria-current={taskId === item.id ? 'true' : undefined} disabled={busy} key={item.id} onClick={() => {onTask(item.id);setShowHistory(false);workspaceHeading.current?.focus()}}><MessageSquareText size={15} aria-hidden="true"/><span>{item.title}</span><small>{formatDate(item.created_at)}</small></button>)}</div>
+    </aside>
+  </div>
 }
