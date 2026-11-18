@@ -141,7 +141,18 @@ func TestWorkspaceApprovalCoverageAndFrozenRecheck(t *testing.T) {
 			t.Fatal("latest inconclusive attempt hidden")
 		}
 	}
-
+	// Unrun requests can outnumber the history page without hiding an older
+	// request title attached to one of the displayed runs.
+	_, err = db.Exec(ctx, `INSERT INTO testing_tasks(id,project_id,journey_id,title,request,request_sha256)
+    SELECT md5('new request ' || n),project_id,journey_id,'New request','A newer request',request_sha256
+    FROM testing_tasks CROSS JOIN generate_series(1,101) AS n WHERE id=$1`, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	historyTasks, err := store.ListTasks(ctx, project.ID, true)
+	if err != nil || len(historyTasks) != 1 || historyTasks[0].Title != task.Title {
+		t.Fatalf("missing request name in run history: %+v %v", historyTasks, err)
+	}
 }
 
 func TestTaskDiscoveryScopeAndRetry(t *testing.T) {

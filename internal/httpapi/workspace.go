@@ -13,7 +13,7 @@ import (
 )
 
 func (a *API) listTasks(w http.ResponseWriter, r *http.Request) {
-	tasks, err := a.store.ListTasks(r.Context(), r.PathValue("id"))
+	tasks, err := a.store.ListTasks(r.Context(), r.PathValue("id"), r.URL.Query().Get("for") == "results")
 	if err != nil {
 		a.fail(w, err)
 		return

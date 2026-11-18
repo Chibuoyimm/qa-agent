@@ -10,9 +10,13 @@ test('coverage includes untested journeys, drafts without runs, and older ungrou
  assert.equal(groups.find(group => group.id === 'checkout')?.executed,1)
  assert.equal(groups.find(group => group.id === 'login')?.executed,0)
  assert.equal(groups.find(group => group.id === '')?.checks[0].scenario.id,'legacy')
- // An unsuccessful latest attempt replaces a previous proof; it cannot stay green.
+ // An inconclusive attempt is distinct from both an earlier verification and a never-attempted check.
  data.checks[0].result.status='blocked'
  assert.equal(coverageGroups(data).find(group => group.id === 'checkout')?.executed,0)
+ assert.equal(coverageGroups(data)[0].attempted,1)
+ data.checks[0].last_verified={run_id:'earlier',base_url:'https://staging.example',finished_at:'yesterday',status:'passed'}
+ assert.equal(coverageGroups(data)[0].executed,1)
+ assert.equal(coverageGroups(data)[0].checks[0].latest?.result.status,'blocked')
 })
 test('cancelled/partial runs identify unfinished checks separately from assertion results', () => {
  const run={scenarios:[scenario('a'),scenario('b'),scenario('c')],results:[{scenario_id:'a',status:'passed'},{scenario_id:'b',status:'error'}]} as Run

@@ -7,7 +7,7 @@ import AiProposals from './AiProposals'
 
 function message(error: unknown): string { return error instanceof Error ? error.message : 'The request failed.' }
 
-export default function RepositorySnapshots({ token, projectId, focusSnapshotId = '' }: { token: string; projectId: string; focusSnapshotId?: string }) {
+export default function RepositorySnapshots({ token, projectId, focusSnapshotId = '', requestPrompt, onReturn }: { token: string; projectId: string; focusSnapshotId?: string; requestPrompt?: string; onReturn?: (id: string) => void }) {
   const [provider, setProvider] = useState<RepositoryProvider>('github')
   const [repository, setRepository] = useState('')
   const [ref, setRef] = useState('main')
@@ -26,7 +26,7 @@ export default function RepositorySnapshots({ token, projectId, focusSnapshotId 
   useEffect(() => () => { generation.current += 1; controller.current?.abort(); setRepositoryToken('') }, [token, projectId])
 
   async function search(options: RequestInit) {
-    const transientToken = repositoryToken.trim(); setRepositoryToken(''); setError(''); setSuccess('')
+    const transientToken = repositoryToken.trim(); setRepositoryToken(''); setError(''); setSuccess(''); setFoundId('')
     const result = await api<{ snapshot: RepositorySnapshot | null; reason: string; candidates: number; excluded: number }>(token, `/api/projects/${encodeURIComponent(projectId)}/repositories/search`, {
       ...options, headers: { ...options.headers, ...(transientToken ? { [provider === 'azure' ? 'X-QA-Azure-PAT' : 'X-QA-GitHub-Token']: transientToken } : {}) },
       body: JSON.stringify({ repository: { provider, repository: repository.trim(), ref: ref.trim(), role }, ai: JSON.parse(String(options.body)) }),
@@ -37,7 +37,7 @@ export default function RepositorySnapshots({ token, projectId, focusSnapshotId 
   }
 
   async function sync(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); setError(''); setSuccess('')
+    event.preventDefault(); setError(''); setSuccess(''); setFoundId('')
     const transientToken = repositoryToken.trim(); setRepositoryToken('')
     const exactPaths = paths.split(/\r?\n/).map(path => path.trim())
     if (provider === 'github' && !/^[^/\s]+\/[^/\s]+$/.test(repository.trim())) { setError('Enter a GitHub owner/name repository.'); return }
@@ -54,7 +54,7 @@ export default function RepositorySnapshots({ token, projectId, focusSnapshotId 
         headers: transientToken ? { [provider === 'azure' ? 'X-QA-Azure-PAT' : 'X-QA-GitHub-Token']: transientToken } : undefined,
         body: JSON.stringify({ provider, repository: repository.trim(), ref: ref.trim(), role, paths: exactPaths }),
       })
-      if (current === generation.current && !abort.signal.aborted) { setSuccess(`Saved ${result.repository} at ${result.commit_sha.slice(0, 12)}. Review the imported files below.`); setRefreshKey(value => value + 1) }
+      if (current === generation.current && !abort.signal.aborted) { setFoundId(result.id); setSuccess(`Saved ${result.repository} at ${result.commit_sha.slice(0, 12)}. Review the imported files below.`); setRefreshKey(value => value + 1) }
     } catch (err) { if (current === generation.current && !abort.signal.aborted) setError(message(err)) }
     finally { if (current === generation.current) { setSyncing(false); controller.current = null } }
   }
@@ -63,7 +63,7 @@ export default function RepositorySnapshots({ token, projectId, focusSnapshotId 
 
   return <><div className="page-heading"><div><div className="eyebrow">REPOSITORY CONTEXT</div><h1>Repository snapshots</h1><p>Import selected source files as fixed, reviewable context for AI proposals.</p></div></div>
     <div className="repository-layout"><div className="panel repository-sync"><div className="panel-kicker">IMPORT SOURCE</div><h2>Find files for your checks</h2><p className="field-help">Describe what to test and let the agent choose relevant source files. Imports do not execute repository code.</p>
-      <label className="field-label" htmlFor="repository-mode">File selection</label><select id="repository-mode" value={mode} disabled={syncing} onChange={event => { setMode(event.target.value as 'agent' | 'manual'); setRepositoryToken(''); setError(''); setSuccess('') }}><option value="agent">Let the agent find files</option><option value="manual">Choose exact files manually</option></select>
+      <label className="field-label" htmlFor="repository-mode">File selection</label><select id="repository-mode" value={mode} disabled={syncing} onChange={event => { setMode(event.target.value as 'agent' | 'manual'); setRepositoryToken(''); setError(''); setSuccess(''); setFoundId('') }}><option value="agent">Let the agent find files</option><option value="manual">Choose exact files manually</option></select>
       <form onSubmit={event => { if (mode === 'manual') void sync(event); else event.preventDefault() }}>
       <label className="field-label" htmlFor="repository-provider">Repository provider</label><select id="repository-provider" value={provider} disabled={syncing} onChange={event => { setProvider(event.target.value as RepositoryProvider); setRepositoryToken(''); setRepository(''); setError(''); setSuccess('') }}><option value="github">GitHub</option><option value="azure">Azure Repos</option></select>
       <label className="field-label" htmlFor="repository-name">{provider === 'azure' ? 'Azure repository URL' : 'GitHub repository'} <span>*</span></label><input id="repository-name" disabled={syncing} value={repository} placeholder={provider === 'azure' ? 'https://dev.azure.com/org/project/_git/repo' : 'owner/name'} autoComplete="off" onChange={event => setRepository(event.target.value)} />
@@ -74,8 +74,9 @@ export default function RepositorySnapshots({ token, projectId, focusSnapshotId 
       {error && <div className="error-banner" role="alert"><AlertCircle size={16} /><span>{error}</span></div>}{success && <div className="repository-success" role="status"><Check size={16} />{success}</div>}
       {mode === 'manual' && <div className="repository-sync-actions">{syncing ? <button className="button button-danger" type="button" onClick={cancel}>Cancel import</button> : <button className="button button-primary" type="submit"><Code2 size={16} />Sync snapshot</button>}</div>}
       </form>
-      {mode === 'agent' && <AiProposals key={`${projectId}:${provider}`} token={token} projectId={projectId} onClose={() => { setMode('manual'); setRepositoryToken('') }} onReview={() => {}} repositorySearch={{ identity: `${repository}:${ref}:${role}`, ready: Boolean(repository.trim() && ref.trim()), send: search, onBusy: setSyncing }} />}
+      {mode === 'agent' && <AiProposals key={`${projectId}:${provider}`} token={token} projectId={projectId} onClose={() => { setMode('manual'); setRepositoryToken('') }} onReview={() => {}} repositorySearch={{ prompt: requestPrompt, identity: `${repository}:${ref}:${role}`, ready: Boolean(repository.trim() && ref.trim()), send: search, onBusy: setSyncing }} />}
     </div><aside className="repository-explainer"><ShieldCheck size={20} /><div><strong>Review before sharing</strong><p>Snapshots are immutable and pinned to a Git commit. Open the complete files below before selecting them for a proposal. Human requirements remain the source of truth for expected outcomes.</p></div></aside></div>
+    {onReturn && <button className="button button-primary" disabled={syncing} onClick={() => onReturn(foundId)}>{foundId ? 'Review files in test request' : 'Return to test request'}</button>}
     <SnapshotBrowser token={token} projectId={projectId} refreshKey={refreshKey} focusSnapshotId={foundId || focusSnapshotId} />
   </>
 }

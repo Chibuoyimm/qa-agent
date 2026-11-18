@@ -36,7 +36,7 @@ export default function JourneyProgress({ run }: { run: Run }) {
                     className={`pill pill-${stage.status === 'passed' ? 'passed' : stage.status === 'failed' ? 'failed' : stage.status === 'error' ? 'error' : 'neutral'}`}
                   >
                     {stage.status === 'not_run'
-                      ? 'Not run — earlier step failed'
+                      ? run.status === 'cancelled' ? 'Skipped after cancellation' : 'Not run — earlier step failed'
                       : stage.status === 'unfinished'
                         ? 'Not completed'
                         : stage.status}

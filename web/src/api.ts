@@ -56,6 +56,7 @@ export type ScenarioResult = {
 }
 
 export type Run = {
+  release?: Pick<Release, "id" | "deployment_key" | "repositories">
   task_id?: string
   source_run_id?: string
   id: string
@@ -400,7 +401,7 @@ export function chatRunCommand(prompt: string): ChatRunAction | null {
 export type Journey = { id: string; project_id: string; name: string; created_at: string }
 export type TaskApproval = { turn_id: string; scenario_ids: string[] }
 export type TestingTask = { id: string; project_id: string; journey_id: string; title: string; request: string; discovery_id?: string; created_at: string; approvals: TaskApproval[] }
-export type CoverageCheck = { scenario: Scenario; result: ScenarioResult; run_id: string; base_url: string; finished_at: string }
-export type CoverageData = { journeys: Journey[]; checks: CoverageCheck[]; scenarios: Scenario[] }
+export type CoverageCheck = { run_status?: RunStatus; last_verified?: {run_id: string; base_url: string; finished_at: string; status: "passed" | "failed"}; scenario: Scenario; result: ScenarioResult; run_id: string; base_url: string; finished_at: string }
+export type CoverageData = { targets?: string[]; journeys: Journey[]; checks: CoverageCheck[]; scenarios: Scenario[] }
 export type FindingReview = { scenario_id: string; status: string; owner: string; reason: string; updated_at?: string }
 export const newRequestID = () => crypto.randomUUID().replaceAll('-', '')

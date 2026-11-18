@@ -1,55 +1,115 @@
-import { useEffect, useRef, useState } from 'react'
-import { api, formatDate, type Discovery, type Scenario } from './api'
-import { errorText } from './workspace'
-export type VerifiedAccess = { discovery_id: string; setup_scenario_id: string; verified_at?: string }
+import { useEffect, useState } from 'react'
+import { api, formatDate, type Scenario, type ScenarioInput } from './api'
+import { errorText, stepLabel } from './workspace'
 
-export default function AppReadiness({ token, projectId, scenarios, access, aiReady, onVerified, onAI, onAddAccess, onTest }: {
-  token: string; projectId: string; scenarios: Scenario[]; access: VerifiedAccess | null; aiReady: boolean
-  onVerified: (access: VerifiedAccess) => void; onAI: () => void; onAddAccess: () => void; onTest: () => void
-}) {
-  const [setup, setSetup] = useState(access?.setup_scenario_id ?? '')
-  const [discovery, setDiscovery] = useState<Discovery | null>(null)
+export type VerifiedAccess = {
+  discovery_id: string
+  setup_scenario_id: string
+  verified_at?: string
+  verification_status?: string
+  verification_error?: string
+  requested_setup?: string
+}
+export type AIReadiness = 'ready' | 'per_request' | 'unavailable'
+type Props = {
+  token: string
+  projectId: string
+  projectName: string
+  handoffURL: string
+  target: string
+  scenarios: Scenario[]
+  access: VerifiedAccess | null
+  aiReady: AIReadiness
+  onVerificationStarted: () => void
+  onAI: () => void
+  onTest: () => void
+}
+export default function AppReadiness({ token, projectId, projectName, target, handoffURL, scenarios, access, aiReady, onVerificationStarted, onAI, onTest }: Props) {
+  const savedSetup = (access?.verification_status ? access.requested_setup : access?.setup_scenario_id) || ''
+  const [setup, setSetup] = useState(savedSetup)
   const [error, setError] = useState('')
-  const [busy, setBusy] = useState(false)
-  const request = useRef<AbortController | null>(null)
-  const verifiedCallback = useRef(onVerified)
-  verifiedCallback.current = onVerified
-  useEffect(() => setSetup(access?.setup_scenario_id ?? ''), [access?.setup_scenario_id])
-  useEffect(() => () => request.current?.abort(), [])
-  useEffect(() => {
-    if (!discovery || !['queued', 'running'].includes(discovery.status)) return
-    const abort = new AbortController()
-    const timer = setTimeout(async () => {
-      try {
-        const value = await api<Discovery>(token, `/api/discoveries/${discovery.id}`, {signal: abort.signal})
-        if (value.status === 'completed') {
-          const saved = await api<VerifiedAccess>(token, `/api/projects/${projectId}/access`, {method: 'POST', signal: abort.signal, body: JSON.stringify({discovery_id: value.id})})
-          if (!abort.signal.aborted) verifiedCallback.current(saved)
-        }
-        if (!abort.signal.aborted) { setDiscovery(value); if (value.status === 'error') setError(value.error || 'Browser access could not be verified.'); setBusy(['queued','running'].includes(value.status)) }
-      } catch (err) { if (!abort.signal.aborted) {setError(errorText(err));setBusy(false)} }
-    }, 1500)
-    return () => { clearTimeout(timer); abort.abort() }
-  }, [discovery, token, projectId])
+  const [starting, setStarting] = useState(false)
+  const [privateSetup, setPrivateSetup] = useState(false)
+  const [reviewSignIn, setReviewSignIn] = useState(false)
+  const [savingSignIn, setSavingSignIn] = useState(false)
+  const [savedSignIn, setSavedSignIn] = useState<Scenario | null>(null)
+  const [copied,setCopied] = useState(false)
+  const [path,setPath] = useState('/login')
+  const [email,setEmail] = useState('Email')
+  const [password,setPassword] = useState('Password')
+  const [submit,setSubmit] = useState('Sign in')
+  const [heading,setHeading] = useState('')
+  useEffect(() => setSetup(savedSetup), [savedSetup])
+  useEffect(onVerificationStarted,[onVerificationStarted])
+  const pending = starting || ['queued','running'].includes(access?.verification_status || '')
+  const matches = Boolean(access?.discovery_id && setup === access.setup_scenario_id)
+  const handoff = `Please set up private browser sign-in for ${projectName} at ${target}. Configure the worker's QA_TEST_EMAIL and QA_TEST_PASSWORD for a test account, review the sign-in steps and verify access here: ${handoffURL}`
   async function verify() {
-    request.current?.abort(); const abort = new AbortController(); request.current = abort
-    setBusy(true);setError('')
-    try { setDiscovery(await api<Discovery>(token, `/api/projects/${projectId}/discoveries`, {method:'POST',signal:abort.signal,body:JSON.stringify({start_path:'/',max_pages:1,...(setup?{setup_scenario_id:setup}:{})})})) }
-    catch (err) {if (!abort.signal.aborted) {setError(errorText(err));setBusy(false)}}
+    setStarting(true)
+    setError('')
+    try {
+      await api(token, `/api/projects/${projectId}/discoveries`, {method:'POST', body:JSON.stringify({start_path:'/',max_pages:1,setup_scenario_id:setup,save_access_default:true})})
+      onVerificationStarted()
+    } catch (err) {setError(errorText(err))}
+    finally {setStarting(false)}
   }
-  const matches = Boolean(access?.discovery_id && setup === access.setup_scenario_id && !error)
-  return <section className="flow-card app-readiness"><div className="eyebrow">GET READY TO TEST</div><h2>{matches && aiReady ? 'Ready to plan checks' : 'Finish your app setup'}</h2>
-    <ol className="readiness-list">
-      <li><strong>1. App URL registered</strong><span>Connected to this workspace</span></li>
-      <li><strong>2. Browser access {matches ? 'verified' : busy ? 'being checked…' : 'needs verification'}</strong><span>{matches ? `Last verified ${formatDate(access?.verified_at)}` : 'Check that the browser worker can open the app.'}</span></li>
-      <li><strong>3. {setup ? 'Private app access' : 'Public app access'}</strong><span>{setup ? matches ? 'Saved access steps succeeded; reused for new requests.' : 'Verify an approved sign-in check before saving it as the default.' : 'No sign-in steps selected. Choose a setup below for a private app.'}</span></li>
-      <li><strong>4. AI {aiReady ? 'ready' : 'needs a connection or model'}</strong><button className="link-button" onClick={onAI}>{aiReady ? 'Manage AI connection' : 'Connect AI and choose a model'}</button></li>
-    </ol>
-    <label>Access for this app<select value={setup} disabled={busy} onChange={event => {setSetup(event.target.value);setError('')}}><option value="">Public app — no sign-in</option>{scenarios.filter(s=>s.approved&&s.steps.every(step=>['navigate','fill','click','assert_text','assert_visible'].includes(step.action))).map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></label>
-    <p>For a private app, use an access check that signs in and confirms a private page is visible. An engineer configures the saved test credentials.</p>
-    <div className="flow-row"><button className="button button-outline" onClick={onAddAccess}>Set up private app sign-in</button><button className="button button-primary" disabled={busy} onClick={()=>void verify()}>{busy ? 'Verifying browser access…' : 'Verify access & save default'}</button></div>
-    {error && <p role="alert" className="error-banner">{error}</p>}
-    {matches && <p>Access verification is evidence that these pages opened at the recorded time. It does not prove the app’s features work.</p>}
-    {matches && aiReady && <button className="button button-primary" onClick={onTest}>Start a test request</button>}
+  function signInDraft(): ScenarioInput {
+    return {
+      name: `Sign in to ${projectName}`, description:'Open the private app with the configured test account.',
+      expected_outcome:`After sign-in, the heading “${heading}” is visible.`, approved:false,
+      steps:[
+        {action:'navigate',path}, {action:'fill',locator:{label:email},secret_env:'QA_TEST_EMAIL'},
+        {action:'fill',locator:{label:password},secret_env:'QA_TEST_PASSWORD'},
+        {action:'click',locator:{role:'button',name:submit}}, {action:'assert_visible',locator:{role:'heading',name:heading}},
+      ],
+    }
+  }
+  async function saveSignIn() {
+    setSavingSignIn(true)
+    setError('')
+    try {
+      const saved = await api<Scenario>(token, `/api/projects/${projectId}/scenarios`, {
+        method: 'POST', body: JSON.stringify({...signInDraft(), approved: true}),
+      })
+      setSavedSignIn(saved)
+      setSetup(saved.id)
+      setPrivateSetup(false)
+      setReviewSignIn(false)
+      onVerificationStarted()
+    } catch (err) { setError(errorText(err)) }
+    finally { setSavingSignIn(false) }
+  }
+  const choices = savedSignIn && !scenarios.some(s => s.id === savedSignIn.id) ? [...scenarios, savedSignIn] : scenarios
+  return <section className="flow-card app-readiness">
+    <h2>{matches ? 'Browser access verified' : 'Connect the test browser'}</h2>
+    <p>{projectName} · {target}</p>
+    <label>Access for this app<select value={setup} disabled={pending} onChange={e => {setSetup(e.target.value);setError('')}}>
+      <option value="">Public app — no sign-in</option>
+      {choices.filter(s => s.approved && s.steps.every(step => ['navigate','fill','click','assert_text','assert_visible'].includes(step.action))).map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+    </select></label>
+    <div className="flow-row"><button className="button button-outline" aria-expanded={privateSetup} onClick={() => setPrivateSetup(!privateSetup)}>Set up private app sign-in</button>
+      <button className="button button-primary" disabled={pending} onClick={() => void verify()}>{pending ? 'Verifying browser access…' : 'Verify access & save default'}</button></div>
+    {pending && <p role="status">The browser is checking access. You can leave this page and return to the result.</p>}
+    {savedSignIn?.id === setup && !matches && !pending && <p role="status">Sign-in check selected. Verify browser access to use it on new requests.</p>}
+    {matches && <p role="status">Browser access verified · {formatDate(access?.verified_at)}</p>}
+    {(error || access?.verification_error) && <p className="error-banner" role="alert">{error || access?.verification_error}</p>}
+    {privateSetup && <section className="access-guide"><h3>Sign-in required</h3>
+      <p>Use the labels shown on the sign-in page. An engineer can supply the test account on the worker.</p>
+      <fieldset disabled={savingSignIn} onChange={() => setReviewSignIn(false)}><label>Sign-in page path<input value={path} onChange={e => setPath(e.target.value)}/></label>
+      <label>Email field label<input value={email} onChange={e=>setEmail(e.target.value)}/></label>
+      <label>Password field label<input value={password} onChange={e=>setPassword(e.target.value)}/></label>
+      <label>Sign-in button name<input value={submit} onChange={e=>setSubmit(e.target.value)}/></label>
+      <label>Heading visible after sign-in<input value={heading} placeholder="e.g. Your dashboard" onChange={e=>setHeading(e.target.value)}/></label></fieldset>
+      <button className="button button-outline" disabled={![path,email,password,submit,heading].every(v=>v.trim())} onClick={() => setReviewSignIn(true)}>Review sign-in check</button>
+      {reviewSignIn && <div className="sign-in-review"><h4>What the browser will do</h4>
+        <ol>{signInDraft().steps.map((step, i) => <li key={i}>{stepLabel(step)}</li>)}</ol>
+        <button className="button button-primary" disabled={savingSignIn} onClick={() => void saveSignIn()}>{savingSignIn ? 'Saving…' : 'Approve & select sign-in check'}</button>
+      </div>}
+      <details><summary>Share setup with an engineer</summary><p>{handoff}</p>
+        <button className="link-button" onClick={async()=>{try{await navigator.clipboard.writeText(handoff);setCopied(true)}catch{setError('Select and copy the setup request above.')}}}>{copied ? 'Copied' : 'Copy setup request'}</button></details>
+    </section>}
+    <div className="readiness-next"><strong>{aiReady === 'per_request' ? 'AI key required per request' : aiReady === 'ready' ? 'AI ready' : 'Choose an AI connection'}</strong>
+      <button className="link-button" onClick={onAI}>Manage AI connection</button></div>
+    <button className="button button-primary" onClick={onTest}>Return to test request</button>
   </section>
 }

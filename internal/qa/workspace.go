@@ -151,11 +151,15 @@ func (s *Store) CreateTask(ctx context.Context, projectID string, in TaskInput) 
 	}
 	return task, nil
 }
-func (s *Store) ListTasks(ctx context.Context, projectID string) ([]TestingTask, error) {
+func (s *Store) ListTasks(ctx context.Context, projectID string, forRunHistory bool) ([]TestingTask, error) {
 	if _, err := s.GetProject(ctx, projectID); err != nil {
 		return nil, err
 	}
-	rows, err := s.db.Query(ctx, `SELECT `+taskColumns+` FROM testing_tasks WHERE project_id=$1 ORDER BY created_at DESC,id DESC LIMIT 100`, projectID)
+	query := `SELECT ` + taskColumns + ` FROM testing_tasks WHERE project_id=$1`
+	if forRunHistory {
+		query += ` AND id IN (SELECT task_id FROM runs WHERE project_id=$1 ORDER BY created_at DESC,id DESC LIMIT 100)`
+	}
+	rows, err := s.db.Query(ctx, query+` ORDER BY created_at DESC,id DESC LIMIT 100`, projectID)
 	if err != nil {
 		return nil, err
 	}

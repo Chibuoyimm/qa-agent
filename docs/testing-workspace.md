@@ -4,36 +4,36 @@ The main navigation is **Test, Coverage, Results, Settings**. Conversations, app
 
 ## Test a journey
 
-1. In Settings → App & access, follow the readiness checklist: register the app URL, choose public access or an approved sign-in check, verify browser access, and connect AI. A completed verification can be saved as the app’s default; its date remains visible and new requests reuse its access check. For private apps, an engineer can add an approved access check using worker-local `QA_TEST_` secret references.
-2. In Test, describe the business behavior and choose or name its journey. Optional bounded exploration finds paths and named controls; selected repository snapshots provide additional source context. Observations are evidence of current behavior, not the business expectation.
+1. In Settings → App & access, choose public access or set up a private sign-in check. The guided form uses the labels on the sign-in page and a heading that confirms success. You can copy the setup request and its workspace link for an engineer who can configure the worker’s test account. Choose **Verify access & save default**. You can leave while the worker checks access. If a replacement verification fails, the previous verified default stays available.
+2. In Test, describe the business behavior. A draft can be saved while setup is pending. Choose a journey if useful. **Find relevant source** carries your request into the repository search. Review the imported revision and select the reviewed snapshot to share when you return. Bounded browser exploration can supply observed paths and controls. In one-time key mode, enter the key on the request that uses it.
 3. Answer any missing business questions. Known access paths, controls and worker-local secret references follow the discovery automatically. Literal access fill values are excluded from model context.
-4. Review the proposed outcomes and the exact assertions shown beneath them. Editing prose alone blocks approval until the plan is revised. Use “Revise plan in chat” for a new requirement, or edit an exact checked value directly; this updates its executable assertion and expectation summary. Revised checks require a fresh review before approval, including after reload. Deselect checks as needed, then approve and run the selected plan. Batch approval is atomic and idempotent, so a network retry reuses the saved checks.
+4. Review the target, release policy and proposed outcomes. Complete journeys summarize the participants and test data, with exact assertions grouped by stage. Editing prose alone blocks approval until the plan is revised. Use “Revise plan in chat” for a new requirement, or edit an exact checked value directly; this updates its executable assertion and expectation summary. Revised checks require a fresh review before approval, including after reload. Deselect checks as needed, then approve and run the selected plan. Batch approval is atomic and idempotent, so a network retry reuses the saved checks.
 5. Follow the run in the conversation or open its full report. Blocked checks, execution errors and unfinished checks remain separate from assertion failures.
 
-“Run all approved checks” runs existing approved checks. It does not discover or certify every possible feature. Advisory is the default; blocking mode remains available under App access & exploration. Existing project-level conversations and the standalone proposal/editor tools are available in Settings → App & access.
+“Run all approved checks” shows how many existing approved checks it will run. It does not discover or certify every possible feature. Advisory is the default; blocking mode remains available under App access & exploration. Existing project-level conversations and the standalone proposal/editor tools are available in Settings → App & access.
 
 ## Evidence, review and recheck
 
-Results display the frozen expected outcome, actual failed assertion text where recorded, ordered executed steps, final screenshots and real browser video. Older runs may lack step records. Missing evidence is reported explicitly. To serve media, the API and worker must share the same `QA_ARTIFACT_DIR`; use an absolute path when their working directories differ. Media requires the operator bearer token, supports range requests, and cannot escape that directory through symlinks. The UI loads authenticated blobs rather than putting tokens into media URLs.
+Failed reports open with the first failed check, its stage and participant when recorded, expected and observed evidence, skipped steps and test-data cleanup. Screenshots, browser recordings and finding review are available there. Passing reports summarize verified outcomes. Expand the timeline for individual steps. Release-triggered reports link to the repositories and revisions recorded for that deployment. Older runs may lack step records. Missing evidence is reported explicitly. To serve media, the API and worker must share the same `QA_ARTIFACT_DIR`; use an absolute path when their working directories differ. Media requires the operator bearer token, supports range requests, and cannot escape that directory through symlinks. The UI loads authenticated blobs rather than putting tokens into media URLs.
 
 A finding review can record a decision, an optional owner and a note without changing the result or expectation. “Works as intended” requires a reason. Discussing a run in Test shares bounded recorded outcomes and assertion comparisons with the selected provider after consent. It does not apply a code fix.
 
-Results use the journey/request name, and history groups rechecks with their source runs. Search names or filter groups by outcome. “What changed?” compares each result with the source: fixed, still failing, new failure, passing, or unverified. The original finding’s review and owner remain visible as context; a recheck can have its own review.
+Results use the journey/request name, and history groups rechecks with their source runs. Search by journey, request title or check name, or filter groups by outcome. “What changed?” compares each result with the source: fixed, still failing, new failure, passing, or unverified. The original finding’s review and owner remain visible as context; a recheck can have its own review.
+
+Discussing a report attaches that specific attempt. A failed-only rerun uses its frozen failed checks even when a newer attempt exists. Starting a new request clears the attachment.
 
 After deploying a fix, choose **Recheck a deployment** and provide the actual allowed app origin. Rechecks copy the original approved snapshot verbatim, retain a link to the original run, and can use a different deployment target. Both API and worker allowlists still apply. Rechecking does not mutate the app's default target or weaken assertions.
 
 ## Coverage
 
-Coverage shows each unique check once using its latest recorded terminal result across the project's history. A later blocked or errored result is unverified; repeated successful runs do not inflate the count. The target and date remain visible.
+Coverage counts each unique check once. Choose **All targets** for project history or a deployment URL for that target alone. Each check shows the latest attempt and links to its evidence. An inconclusive attempt leaves the last conclusive pass or failure, its target, date and report available. The outcome counts filter the list.
 
-“Test this journey” opens a request with that journey selected and a suggested prompt. New requests can reuse an existing journey or use a short editable name. Coverage badges show outcome counts with neutral styling rather than labeling every observed journey green.
-
-Journeys are explicit records. Add important journeys before tests exist to keep gaps visible. The headline distinguishes executed checks from journeys; only assertion passes and failures count as checks that ran. Drafts, never-run checks, blocked/error outcomes and untested journeys are identified separately. Older checks without a journey remain available to organize. App discovery alone is not counted as a test run.
+Add important journeys before writing checks to make gaps visible. A journey with no recorded attempt appears as untested. A journey with only inconclusive attempts remains visible separately. Browser exploration alone does not count as a test run. **Test this journey** opens a separate draft so you can return to an unfinished general request.
 
 ## API additions
 
 - Project-scoped `journeys`, `coverage`, and `tasks` endpoints
-- `GET /api/projects/{id}/access` reads the saved default verification; `POST` with `discovery_id` saves a completed, same-project browser observation. It stores no credentials. Migration 008 adds this metadata.
+- `GET /api/projects/{id}/access` reads the saved default verification; `POST` with `discovery_id` saves a completed, same-project browser observation. It stores no credentials. A discovery started with `save_access_default` records verification intent immediately. The newest requested successful check becomes the default when it completes. Migration 010 adds pending verification metadata.
 - Task-scoped `discovery`, `chat`, `approve`, and `runs` endpoints
 - Run-scoped `recheck`, `reviews`, and authenticated `artifacts/{scenario_id}/{index}` endpoints
 

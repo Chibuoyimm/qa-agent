@@ -18,7 +18,9 @@ export function coverageGroups(data: CoverageData) {
   if (ungrouped.scenarios.length) groups.push(ungrouped)
   return groups.map(group => {
     const checks = group.scenarios.map(scenario => ({ scenario, latest: latest.get(scenario.id) }))
-    return { ...group, checks, executed: checks.filter(check => ['passed', 'failed'].includes(check.latest?.result.status ?? '')).length }
+    const attempted = checks.filter(check => check.latest).length
+    const executed = checks.filter(({latest}) => latest?.last_verified || ['passed','failed'].includes(latest?.result.status ?? '')).length
+    return { ...group, checks, attempted, executed }
   })
 }
 
@@ -63,11 +65,16 @@ export function runTitle(run: Run, tasks: TestingTask[], journeys: Journey[]) {
   const task = tasks.find(t => t.id === run.task_id)
   return journeys.find(j => j.id === task?.journey_id)?.name || task?.title || run.scenarios[0]?.name || 'App checks'
 }
+export function completionLabel(run: Run, id: string) {
+  const status = run.results.find(result => result.scenario_id === id)?.status
+  if (run.status === 'cancelled' && status !== 'passed' && status !== 'failed') return 'Cancelled before completion'
+  return status
+}
 export function compareRuns(original: Run, next: Run) {
   const ids = [...new Set([...original.scenarios, ...next.scenarios].map(s => s.id))]
   return ids.map(id => {
-    const before = original.results.find(r => r.scenario_id === id)?.status
-    const after = next.results.find(r => r.scenario_id === id)?.status
+    const before = completionLabel(original, id)
+    const after = completionLabel(next, id)
     const changed = before === 'failed' && after === 'passed' ? 'Fixed' : before === 'failed' && after === 'failed' ? 'Still failing' : before === 'passed' && after === 'failed' ? 'New failure' : after === 'passed' ? 'Passing' : after === 'failed' ? 'Failing' : 'Unverified'
     return { id, name: next.scenarios.find(s => s.id === id)?.name || original.scenarios.find(s => s.id === id)!.name, before: before ?? 'Not completed', after: after ?? 'Not completed', changed }
   })
