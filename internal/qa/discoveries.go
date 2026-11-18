@@ -16,9 +16,10 @@ import (
 )
 
 type DiscoveryInput struct {
-	StartPath       string `json:"start_path"`
-	MaxPages        int    `json:"max_pages"`
-	SetupScenarioID string `json:"setup_scenario_id,omitempty"`
+	SaveAccessDefault bool   `json:"save_access_default,omitempty"`
+	StartPath         string `json:"start_path"`
+	MaxPages          int    `json:"max_pages"`
+	SetupScenarioID   string `json:"setup_scenario_id,omitempty"`
 }
 
 type DiscoveryElement struct {
@@ -209,9 +210,14 @@ func (s *Store) CreateDiscovery(ctx context.Context, projectID string, in Discov
 	if err != nil {
 		return Discovery{}, err
 	}
-	row := s.db.QueryRow(ctx, `INSERT INTO discoveries(id,project_id,base_url,start_path,max_pages,setup_scenario,status)
-		VALUES($1,$2,$3,$4,$5,$6,'queued') RETURNING `+discoveryColumns,
-		id, projectID, project.BaseURL, in.StartPath, in.MaxPages, setup)
+	row := s.db.QueryRow(ctx, `WITH job AS (INSERT INTO discoveries(id,project_id,base_url,start_path,max_pages,setup_scenario,status)
+		VALUES($1,$2,$3,$4,$5,$6,'queued') RETURNING `+discoveryColumns+`
+ ), intent AS (
+ INSERT INTO verified_app_access(project_id,requested_discovery_id)
+ SELECT project_id,id FROM job WHERE $7
+ ON CONFLICT(project_id) DO UPDATE SET requested_discovery_id=excluded.requested_discovery_id
+ ) SELECT `+discoveryColumns+` FROM job`,
+		id, projectID, project.BaseURL, in.StartPath, in.MaxPages, setup, in.SaveAccessDefault)
 	return scanDiscovery(row)
 }
 
@@ -408,9 +414,13 @@ func (s *Store) CompleteDiscovery(ctx context.Context, id string, in CompleteDis
 	if in.Result != nil {
 		status = "completed"
 	}
-	row := s.db.QueryRow(ctx, `UPDATE discoveries SET status=$2,result=$3,error=$4,finished_at=now(),
+	row := s.db.QueryRow(ctx, `WITH finished AS (UPDATE discoveries SET status=$2,result=$3,error=$4,finished_at=now(),
 		lease_token=NULL,lease_expires_at=NULL WHERE id=$1 AND status='running' AND lease_token=$5
-		AND lease_expires_at>clock_timestamp() RETURNING `+discoveryColumns,
+		AND lease_expires_at>clock_timestamp() RETURNING `+discoveryColumns+`
+ ), saved AS (
+ UPDATE verified_app_access a SET discovery_id=f.id FROM finished f
+ WHERE a.requested_discovery_id=f.id AND f.status='completed'
+ ) SELECT `+discoveryColumns+` FROM finished`,
 		id, status, encoded, in.Error, hex.EncodeToString(hash[:]))
 	discovery, err := scanDiscovery(row)
 	if errors.Is(err, pgx.ErrNoRows) {

@@ -130,6 +130,7 @@ type ScenarioResult struct {
 }
 
 type Run struct {
+	Release     *RunDeployment   `json:"release,omitempty"`
 	TaskID      string           `json:"task_id,omitempty"`
 	SourceRunID string           `json:"source_run_id,omitempty"`
 	ID          string           `json:"id"`

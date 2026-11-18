@@ -218,3 +218,44 @@ func TestConcurrentDiscoveryClaimsAreUnique(t *testing.T) {
 		t.Fatalf("claimed %d discoveries", len(seen))
 	}
 }
+
+func TestVerificationFinishesWithoutTheClientAndHonorsLatestIntent(t *testing.T) {
+	store, _ := testStore(t)
+	ctx := context.Background()
+	project, err := store.CreateProject(ctx, qa.ProjectInput{Name: "Access", BaseURL: "http://localhost:4174"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := func(save bool) (qa.Discovery, string) {
+		t.Helper()
+		job, err := store.CreateDiscovery(ctx, project.ID, qa.DiscoveryInput{StartPath: "/", MaxPages: 1, SaveAccessDefault: save})
+		if err != nil {
+			t.Fatal(err)
+		}
+		claimed, token, _, ok, err := store.ClaimDiscovery(ctx, "access-worker")
+		if err != nil || !ok || claimed.ID != job.ID {
+			t.Fatalf("claim: %v %v", ok, err)
+		}
+		return job, token
+	}
+	finish := func(id, token string) {
+		t.Helper()
+		if _, err := store.CompleteDiscovery(ctx, id, qa.CompleteDiscoveryInput{LeaseToken: token, Result: discoveryResult()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old, oldLease := start(true)
+	newer, newLease := start(true)
+	finish(newer.ID, newLease)
+	finish(old.ID, oldLease)
+	ordinary, lease := start(false)
+	finish(ordinary.ID, lease)
+	failed, lease := start(true)
+	if _, err = store.CompleteDiscovery(ctx, failed.ID, qa.CompleteDiscoveryInput{LeaseToken: lease, Error: "Could not open login"}); err != nil {
+		t.Fatal(err)
+	}
+	access, err := store.GetVerifiedAccess(ctx, project.ID)
+	if err != nil || access.DiscoveryID != newer.ID || access.VerificationID != failed.ID || access.VerificationStatus != "error" {
+		t.Fatalf("last verified access: %+v %v", access, err)
+	}
+}

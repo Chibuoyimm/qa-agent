@@ -396,20 +396,33 @@ func (s *Store) ApproveTask(ctx context.Context, projectID, taskID string, in Ta
 	return approval, nil
 }
 
+type CoverageVerification struct {
+	RunID      string    `json:"run_id"`
+	BaseURL    string    `json:"base_url"`
+	FinishedAt time.Time `json:"finished_at"`
+	Status     string    `json:"status"`
+}
 type CoverageCheck struct {
-	Scenario   Scenario       `json:"scenario"`
-	Result     ScenarioResult `json:"result"`
-	RunID      string         `json:"run_id"`
-	BaseURL    string         `json:"base_url"`
-	FinishedAt time.Time      `json:"finished_at"`
+	LastVerified *CoverageVerification `json:"last_verified,omitempty"`
+	RunStatus    string                `json:"run_status"`
+	Scenario     Scenario              `json:"scenario"`
+	Result       ScenarioResult        `json:"result"`
+	RunID        string                `json:"run_id"`
+	BaseURL      string                `json:"base_url"`
+	FinishedAt   time.Time             `json:"finished_at"`
 }
 type Coverage struct {
+	Targets   []string        `json:"targets"`
 	Journeys  []Journey       `json:"journeys"`
 	Checks    []CoverageCheck `json:"checks"`
 	Scenarios []Scenario      `json:"scenarios"`
 }
 
 func (s *Store) Coverage(ctx context.Context, projectID string) (Coverage, error) {
+	return s.CoverageForTarget(ctx, projectID, "")
+}
+
+func (s *Store) CoverageForTarget(ctx context.Context, projectID, target string) (Coverage, error) {
 	journeys, err := s.ListJourneys(ctx, projectID)
 	if err != nil {
 		return Coverage{}, err
@@ -421,23 +434,32 @@ func (s *Store) Coverage(ctx context.Context, projectID string) (Coverage, error
 	if err := s.expireLeases(ctx); err != nil {
 		return Coverage{}, err
 	}
-	rows, err := s.db.Query(ctx, `WITH latest AS (
- SELECT DISTINCT ON (result->>'scenario_id') r.id,r.base_url,r.created_at,r.finished_at,r.scenarios,result
+	var targets []string
+	if err := s.db.QueryRow(ctx, `SELECT ARRAY(SELECT DISTINCT base_url FROM runs WHERE project_id=$1 ORDER BY base_url)`, projectID).Scan(&targets); err != nil {
+		return Coverage{}, err
+	}
+	rows, err := s.db.Query(ctx, `WITH attempts AS (
+ SELECT r.id,r.base_url,r.status,r.created_at,COALESCE(r.finished_at,r.created_at) AS finished_at,r.scenarios,result,result->>'scenario_id' AS scenario_id
  FROM runs r CROSS JOIN LATERAL jsonb_array_elements(r.results) result
- WHERE r.project_id=$1 AND r.status NOT IN ('queued','running')
- ORDER BY result->>'scenario_id',r.created_at DESC,r.id DESC
- ) SELECT snapshot,result,id,base_url,COALESCE(finished_at,created_at)
- FROM latest CROSS JOIN LATERAL jsonb_array_elements(scenarios) snapshot
- WHERE snapshot->>'id'=result->>'scenario_id'`, projectID)
+ WHERE r.project_id=$1 AND ($2='' OR r.base_url=$2) AND r.status NOT IN ('queued','running')
+ ), latest AS (
+ SELECT DISTINCT ON (scenario_id) * FROM attempts ORDER BY scenario_id,created_at DESC,id DESC
+ ), verified AS (
+ SELECT DISTINCT ON (scenario_id) scenario_id,jsonb_build_object('run_id',id,'base_url',base_url,'finished_at',finished_at,'status',result->>'status') AS proof
+ FROM attempts WHERE result->>'status' IN ('passed','failed') ORDER BY scenario_id,created_at DESC,id DESC
+ ) SELECT snapshot,l.result,l.id,l.base_url,l.finished_at,l.status,v.proof
+ FROM latest l LEFT JOIN verified v USING(scenario_id)
+ CROSS JOIN LATERAL jsonb_array_elements(l.scenarios) snapshot
+ WHERE snapshot->>'id'=l.scenario_id`, projectID, target)
 	if err != nil {
 		return Coverage{}, err
 	}
 	defer rows.Close()
-	coverage := Coverage{Journeys: journeys, Scenarios: scenarios, Checks: []CoverageCheck{}}
+	coverage := Coverage{Targets: targets, Journeys: journeys, Scenarios: scenarios, Checks: []CoverageCheck{}}
 	for rows.Next() {
 		var c CoverageCheck
-		var scenario, result []byte
-		if err := rows.Scan(&scenario, &result, &c.RunID, &c.BaseURL, &c.FinishedAt); err != nil {
+		var scenario, result, proof []byte
+		if err := rows.Scan(&scenario, &result, &c.RunID, &c.BaseURL, &c.FinishedAt, &c.RunStatus, &proof); err != nil {
 			return Coverage{}, err
 		}
 		if err := json.Unmarshal(scenario, &c.Scenario); err != nil {
@@ -445,6 +467,11 @@ func (s *Store) Coverage(ctx context.Context, projectID string) (Coverage, error
 		}
 		if err := json.Unmarshal(result, &c.Result); err != nil {
 			return Coverage{}, err
+		}
+		if len(proof) > 0 {
+			if err := json.Unmarshal(proof, &c.LastVerified); err != nil {
+				return Coverage{}, err
+			}
 		}
 		coverage.Checks = append(coverage.Checks, c)
 	}

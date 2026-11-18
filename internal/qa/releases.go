@@ -41,6 +41,28 @@ type ReleaseInput struct {
 	Repositories  []ReleaseRepositoryInput `json:"repositories"`
 }
 
+type RunDeployment struct {
+	ID            string              `json:"id"`
+	DeploymentKey string              `json:"deployment_key"`
+	Repositories  []ReleaseRepository `json:"repositories"`
+}
+
+func (s *Store) RunDeployment(ctx context.Context, projectID, runID string) (*RunDeployment, error) {
+	var deployment RunDeployment
+	var sources []byte
+	err := s.db.QueryRow(ctx, `SELECT id,deployment_key,repositories FROM releases WHERE project_id=$1 AND run_id=$2`, projectID, runID).Scan(&deployment.ID, &deployment.DeploymentKey, &sources)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(sources, &deployment.Repositories); err != nil {
+		return nil, err
+	}
+	return &deployment, nil
+}
+
 type Release struct {
 	ID            string              `json:"id"`
 	ProjectID     string              `json:"project_id"`

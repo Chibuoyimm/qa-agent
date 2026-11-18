@@ -636,6 +636,11 @@ func (a *API) getRun(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, err)
 		return
 	}
+	run.Release, err = a.store.RunDeployment(r.Context(), run.ProjectID, run.ID)
+	if err != nil {
+		a.fail(w, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, run)
 }
 

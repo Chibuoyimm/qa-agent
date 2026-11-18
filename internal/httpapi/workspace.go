@@ -100,7 +100,7 @@ func (a *API) assignJourney(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(204)
 }
 func (a *API) coverage(w http.ResponseWriter, r *http.Request) {
-	coverage, err := a.store.Coverage(r.Context(), r.PathValue("id"))
+	coverage, err := a.store.CoverageForTarget(r.Context(), r.PathValue("id"), r.URL.Query().Get("target"))
 	if err != nil {
 		a.fail(w, err)
 		return

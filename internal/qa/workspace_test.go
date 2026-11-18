@@ -119,6 +119,29 @@ func TestWorkspaceApprovalCoverageAndFrozenRecheck(t *testing.T) {
 	if err != nil || original.Status != "failed" || original.Scenarios[0].ExpectedOutcome != draft.ExpectedOutcome {
 		t.Fatal("original evidence lost", err)
 	}
+	// A later environment failure retains the earlier pass and its deployment.
+	attempt, err := store.RecheckRun(ctx, recheck.ID, qa.RecheckInput{RequestID: strings.Repeat("9", 32), BaseURL: run.BaseURL, Mode: "advisory"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, lease, _, found, err = store.ClaimRun(ctx, "workspace-worker")
+	if err != nil || !found || claimed.ID != attempt.ID {
+		t.Fatal("third claim", err)
+	}
+	result.Status = "error"
+	if _, err = store.CompleteRun(ctx, attempt.ID, qa.CompleteInput{LeaseToken: lease, Results: []qa.ScenarioResult{result}}); err != nil {
+		t.Fatal(err)
+	}
+	for target, wantVerified := range map[string]string{"": recheck.ID, run.BaseURL: run.ID, recheck.BaseURL: recheck.ID} {
+		report, err := store.CoverageForTarget(ctx, project.ID, target)
+		if err != nil || len(report.Checks) != 1 || report.Checks[0].LastVerified == nil || report.Checks[0].LastVerified.RunID != wantVerified {
+			t.Fatalf("coverage on %q: %+v %v", target, report, err)
+		}
+		if target != recheck.BaseURL && report.Checks[0].Result.Status != "error" {
+			t.Fatal("latest inconclusive attempt hidden")
+		}
+	}
+
 }
 
 func TestTaskDiscoveryScopeAndRetry(t *testing.T) {

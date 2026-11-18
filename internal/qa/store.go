@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -267,7 +269,48 @@ func (s *Store) GetRun(ctx context.Context, id string) (Run, error) {
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Run{}, ErrNotFound
 	}
+	if err == nil {
+		labelLegacyRecordings(&run)
+	}
 	return run, err
+}
+
+// Early multi-participant workers recorded the actor's directory but omitted
+// the label. Match the worker's exact run, scenario and actor path on read.
+func labelLegacyRecordings(run *Run) {
+	for _, result := range run.Results {
+		var folders map[string]string
+		for i, artifact := range result.Artifacts {
+			if artifact.Actor != "" || strings.Count(artifact.Path, "/") != 3 {
+				continue
+			}
+			if folders == nil {
+				folders = actorRecordingFolders(run, result.ScenarioID)
+			}
+			result.Artifacts[i].Actor = folders[path.Dir(artifact.Path)]
+		}
+	}
+}
+
+func actorRecordingFolders(run *Run, scenarioID string) map[string]string {
+	part := func(value string) string {
+		sum := sha256.Sum256([]byte(value))
+		return hex.EncodeToString(sum[:12])
+	}
+	folders := map[string]string{}
+	prefix := part(run.ID) + "/" + part(scenarioID) + "/"
+	for _, scenario := range run.Scenarios {
+		if scenario.ID != scenarioID {
+			continue
+		}
+		for _, step := range scenario.Steps {
+			if step.Action == "use_actor" && step.Value != nil {
+				folders[prefix+part(*step.Value)] = *step.Value
+			}
+		}
+		break
+	}
+	return folders
 }
 
 func (s *Store) ListRuns(ctx context.Context, projectID string) ([]Run, error) {
