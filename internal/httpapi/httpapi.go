@@ -36,6 +36,9 @@ func New(store *qa.Store, proposals *planner.Planner, repositories *repository.C
 
 func (a *API) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.Handle("GET /api/run-targets", a.authorize(a.apiToken, func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, a.store.RunTargets())
+	}))
 	mux.Handle("GET /api/fixture-profiles", a.authorize(a.apiToken, func(w http.ResponseWriter, r *http.Request) {
 		profiles := a.FixtureProfiles
 		if profiles == nil {

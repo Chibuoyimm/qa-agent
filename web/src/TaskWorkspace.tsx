@@ -3,9 +3,9 @@ import { ArrowRight, LoaderCircle, Play, Plus, Sparkles, History, MessageSquareT
 import JourneyProgress from './JourneyProgress'
 import PlanningRecovery from './PlanningRecovery'
 import AiProposals from './AiProposals'
-import ScenarioEditor from './ScenarioEditor'
-import { api, formatDate, isActive, newRequestID, type ChatPage, type ChatTurn, type Discovery, type Journey, type Project, type Run, type Scenario, type ScenarioInput, type TaskApproval, type TestingTask, validateScenario } from './api'
-import { errorText, runCounts, scenarioInput, checkCount, requiresPlanRevision, assertionSummary, stepLabel, shortTitle, assertionKey, targetLabel, journeyStages, journeySummary } from './workspace'
+import ReviewPlan, { type PlanRunSettings } from './ReviewPlan'
+import { api, formatDate, isActive, newRequestID, type ChatPage, type ChatTurn, type Discovery, type Journey, type Project, type Run, type Scenario, type TestingTask } from './api'
+import { errorText, runCounts, checkCount, shortTitle, journeySummary } from './workspace'
 
 export function RunCard({ token, id, onOpen }: { token: string; id: string; onOpen: (id: string) => void }) {
   const [run, setRun] = useState<Run | null>(null)
@@ -26,66 +26,6 @@ export function RunCard({ token, id, onOpen }: { token: string; id: string; onOp
   }, [id, token])
   const counts = run ? runCounts(run) : null
   return <section className="flow-card run-summary"><div className="flow-row"><strong>{run ? `${checkCount(run.scenarios.length)} selected` : 'Loading run…'}</strong><span className={`pill pill-${run?.status ?? 'queued'}`}>{run?.status ?? 'loading'}</span></div>{counts && <p>{counts.passed} passed · {counts.failed} failed · {counts.blocked + counts.error} unverified · {counts.incomplete} unfinished</p>}{run && <><p className="muted">{run.base_url}</p><JourneyProgress run={run}/></>}{error && <p role="alert">{error}</p>}<button className="link-button" onClick={() => onOpen(id)}>Open results and evidence <ArrowRight size={15} /></button></section>
-}
-
-function ReviewPlan({ token, project, task, turn, scenarios, onApproved, onRun, onRevise, busy, mode, onMode }: { token: string; project: Project; task: TestingTask; turn: ChatTurn; scenarios: Scenario[]; onApproved: () => Promise<void>; onRun: (ids: string[], requestID: string) => Promise<void>; onRevise: (prompt: string) => void; mode: Run['mode']; onMode: (value:Run['mode'])=>void; busy: boolean }) {
-  const reviewKey = `qa-review:${project.id}:${turn.id}`
-  const [drafts, setDrafts] = useState(() => {
-    try { const saved = JSON.parse(sessionStorage.getItem(reviewKey) || 'null'); const items = Array.isArray(saved) ? saved : saved?.drafts; if (Array.isArray(items) && items.length === turn.proposal?.scenarios.length) return items.map(validateScenario) } catch { /* Restore the original proposal if a draft is unavailable. */ }
-    return (turn.proposal?.scenarios ?? []).map(scenarioInput)
-  })
-  const [selected, setSelected] = useState<number[]>(() => {
-    try { const saved = JSON.parse(sessionStorage.getItem(reviewKey) || 'null'); if (Array.isArray(saved?.selected)) return [...new Set<number>(saved.selected.filter((index: unknown): index is number => typeof index === 'number' && Number.isInteger(index) && index >= 0 && index < drafts.length))] } catch { /* Select the proposed plan by default. */ }
-    return drafts.map((_, i) => i)
-  })
-  const [unresolved, setUnresolved] = useState<number[]>(() => {
-    try { const value = JSON.parse(sessionStorage.getItem(reviewKey) || 'null'); return Array.isArray(value?.unresolved) ? value.unresolved : [] } catch { return [] }
-  })
-  const [reviewed, setReviewed] = useState(false)
-  const needsRevision = selected.some(i => unresolved.includes(i) || requiresPlanRevision(turn.proposal!.scenarios[i], drafts[i]))
-  const edited = selected.some(i => JSON.stringify(scenarioInput(turn.proposal!.scenarios[i])) !== JSON.stringify(drafts[i]))
-  useEffect(() => setReviewed(false), [drafts, selected])
-  const [editing, setEditing] = useState<number | null>(null)
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState('')
-  const [approvedHere, setApprovedHere] = useState<TaskApproval | null>(null)
-  const retryID = useRef(newRequestID())
-  const completeJourney = drafts.length === 1 && journeySummary(drafts[0].steps).phases.length > 0
-  const approval = task.approvals.find(item => item.turn_id === turn.id) ?? approvedHere
-  useEffect(() => {
-    try { if (approval) sessionStorage.removeItem(reviewKey); else sessionStorage.setItem(reviewKey, JSON.stringify({ drafts, selected, unresolved })) } catch { /* Approval remains available if tab storage is full. */ }
-  }, [approval, drafts, selected, unresolved, reviewKey])
-  async function approveAndRun() {
-    if (!approval && (needsRevision || (edited && !reviewed))) { setError('Review the updated assertions before approval. A changed requirement needs an updated plan.'); return }
-    setSaving(true); setError('')
-    try {
-      const approved = approval ?? await api<TaskApproval>(token, `/api/projects/${project.id}/tasks/${task.id}/approve`, { method: 'POST', body: JSON.stringify({ turn_id: turn.id, drafts: selected.map(index => ({ index, ...drafts[index], approved: true })) }) })
-      setApprovedHere(approved)
-      await onApproved()
-      await onRun(approved.scenario_ids, retryID.current)
-      retryID.current = newRequestID()
-    } catch (err) { setError(errorText(err)) } finally { setSaving(false) }
-  }
-  function outcomeEditor(draft: ScenarioInput,index: number) {
-    return <><label className="field-label" htmlFor={`outcome-${turn.id}-${index}`}>Expected outcome</label><textarea id={`outcome-${turn.id}-${index}`} rows={2} maxLength={4000} value={draft.expected_outcome} disabled={Boolean(approval) || saving} onChange={event => { setUnresolved(previous => [...new Set([...previous.filter(i=>i!==index), ...(event.target.value !== turn.proposal!.scenarios[index].expected_outcome ? [index] : [])])]); setDrafts(previous => previous.map((item, i) => i === index ? { ...item, expected_outcome: event.target.value } : item)) }} /></>
-  }
-  function renderAssertion(draft: ScenarioInput,index: number,stepIndex: number) {
-    const step = draft.steps[stepIndex]
-    return step.action === 'assert_text' ? <label key={stepIndex}>Exact text for {step.test_id || targetLabel(step)}<input value={step.value ?? ''} disabled={saving} onChange={event => {setUnresolved(previous=>previous.filter(i=>i!==index)); setDrafts(previous => previous.map((item, i) => { if (i !== index) return item; const steps = item.steps.map((value, j) => j === stepIndex ? { ...value, value: event.target.value } : value); return { ...item, steps, expected_outcome: assertionKey(steps) === assertionKey(turn.proposal!.scenarios[index].steps) ? turn.proposal!.scenarios[index].expected_outcome : assertionSummary(steps) } })) }} /></label> : step.action.startsWith('assert_') ? <p key={stepIndex}>{stepLabel(step)}</p> : null
-  }
-  if (!drafts.length) return null
-  if (approval) return <section className="review-plan"><div className="eyebrow">APPROVED PLAN · {checkCount(approval.scenario_ids.length).toUpperCase()}</div>{approval.scenario_ids.map(id => { const check = scenarios.find(item => item.id === id); return <div className="plan-check" key={id}><strong>{check?.name ?? 'Approved check'}</strong><p>{check?.expected_outcome ?? 'Loading saved expectation…'}</p><small>{check?.steps.length ?? '—'} browser steps · Approved</small></div> })}{error && <p role="alert">{error}</p>}<button className="button button-primary" disabled={busy || saving} onClick={() => void approveAndRun()}><Play size={15} />{saving ? 'Starting…' : completeJourney ? 'Run journey again' : `Run ${checkCount(approval.scenario_ids.length)} again`}</button></section>
-  return <section className="review-plan"><div className="flow-row"><div><div className="eyebrow">REVIEW THE PLAN</div><h3>{checkCount(selected.length)} selected</h3></div></div><label className="approval-policy">Release policy<select value={mode} disabled={busy || saving} onChange={e=>onMode(e.target.value as Run['mode'])}><option value="advisory">Report findings</option><option value="blocking">Block release on failure</option></select></label><p>Target · {project.base_url}<br/>{mode === 'blocking' ? 'A required failure blocks this release.' : 'Advisory run · reports findings without blocking release.'}</p>
-    {drafts.map((draft, index) => <article className="plan-check" key={index}><label className="inline-check"><input type="checkbox" checked={selected.includes(index)} disabled={Boolean(approval) || saving} onChange={event => setSelected(previous => event.target.checked ? [...previous, index].sort((a, b) => a - b) : previous.filter(i => i !== index))} /><strong>{index + 1}. {draft.name}</strong></label>{journeySummary(draft.steps).phases.length>0&&<div className="journey-plan-summary"><strong>Complete journey · {journeySummary(draft.steps).phases.length} stages{journeySummary(draft.steps).fixture ? ' + preparation & cleanup' : ''} · {Math.max(1,journeySummary(draft.steps).actors.length)} participants</strong><p>{journeySummary(draft.steps).actors.map(actor=>actor.replaceAll('_',' ')).join(' and ')}</p><p>{draft.expected_outcome}</p><p>{journeySummary(draft.steps).fixture?'Fresh-data preparation and cleanup included in every run.':'Uses existing app data with fresh browser sessions.'} Later stages stop when a required step fails.</p></div>}{completeJourney ? <details><summary>Edit expected outcome</summary>{outcomeEditor(draft,index)}</details> : outcomeEditor(draft,index)}{journeySummary(draft.steps).phases.length ? <details className="assertion-editor">
-      <summary>Review {journeySummary(draft.steps).assertions} assertions by stage</summary>
-      {journeyStages(draft.steps,undefined,false).map((stage,i) => <section key={i}><h4>{stage.name}</h4>{stage.indexes.map(stepIndex => renderAssertion(draft,index,stepIndex))}</section>)}
-    </details> : <div className="assertion-editor"><strong>What the browser will check</strong>{draft.steps.map((_, stepIndex) => renderAssertion(draft,index,stepIndex))}</div>}
-    {(unresolved.includes(index) || requiresPlanRevision(turn.proposal!.scenarios[index], draft)) && <div className="plan-revision" role="status"><strong>Requirement changed — update the plan before approval.</strong><p>Edit the checked values above, or ask the agent to revise this check.</p><button className="link-button" disabled={busy || saving} onClick={() => onRevise(`Revise the check “${draft.name}”. The required outcome is now: ${draft.expected_outcome}. Update the executable assertion steps to prove this requirement. Return a new unapproved plan for review; do not run it.`)}>Revise plan in chat</button></div>}
-    <details><summary>{draft.steps.length} browser steps</summary><ol>{draft.steps.map((step, i) => <li key={i}>{stepLabel(step)}</li>)}</ol>{!approval && <button className="link-button" disabled={saving} onClick={() => setEditing(index)}>Edit this check</button>}</details></article>)}
-    {edited && !needsRevision && <label className="inline-check revised-confirmation"><input type="checkbox" checked={reviewed} onChange={event => setReviewed(event.target.checked)} />I reviewed the revised outcomes and the exact assertions shown above.</label>}
-    {error && <div className="error-banner" role="alert">{error}</div>}<button className="button button-primary" disabled={busy || saving || (!approval && (selected.length === 0 || needsRevision || (edited && !reviewed)))} onClick={() => void approveAndRun()}>{saving ? <LoaderCircle size={16} className="spin" /> : <Play size={16} />}{saving ? 'Saving and starting…' : completeJourney ? 'Approve & run journey' : `Approve & run ${checkCount(selected.length)}`}</button>
-    {editing !== null && <ScenarioEditor token={token} projectId={project.id} initial={drafts[editing]} source="proposal" onClose={() => setEditing(null)} onSaved={() => {}} onDraft={draft => {if (assertionKey(draft.steps) !== assertionKey(drafts[editing].steps)) setUnresolved(previous => previous.filter(i=>i!==editing)); setDrafts(previous => previous.map((item, i) => i === editing ? draft : item))}} />}
-  </section>
 }
 
 export default function TaskWorkspace({ token, project, taskId, draftKey, journeys, scenarios, onTask, onChanged, onOpenRun, initialRunContext, attachedRun, onContextUsed, configRevision, initialJourney = '', defaultSetup = '', accessVerified, sourceToReview, onFindSource, onAIReady, onSettings, onAISettings }: { token: string; project: Project; taskId: string; draftKey: string; journeys: Journey[]; scenarios: Scenario[]; onTask: (id: string, keepAttachment?: boolean) => void; onChanged: () => void; onOpenRun: (id: string) => void; initialRunContext: string; attachedRun: Run | null; accessVerified: boolean; sourceToReview: string; onFindSource: (prompt:string) => void; onContextUsed: () => void; configRevision: number; initialJourney?: string; defaultSetup?: string; onAIReady: (ready: 'ready' | 'per_request' | 'unavailable') => void; onSettings: () => void; onAISettings: () => void }) {
@@ -192,14 +132,14 @@ export default function TaskWorkspace({ token, project, taskId, draftKey, journe
       if (initialRunContext) onContextUsed()
     } finally { setProgress(''); if (id && alive.current) await refresh(id).catch(err => setError(errorText(err))) }
   }
-  async function launch(prompt: string, action: string, signal?: AbortSignal, ids?: string[], requestID = newRequestID()) {
+  async function launch(prompt: string, action: string, signal?: AbortSignal, ids?: string[], requestID = newRequestID(), settings?: PlanRunSettings) {
     setProgress('Queuing approved checks…'); setError('')
     let id = ''
     try {
       id = await ensureTask(prompt, signal)
       const source = initialRunContext || [...turns].reverse().find(turn => turn.run_id)?.run_id
       if (action === 'rerun_failed' && !source) throw new Error('Open an earlier run in Results to recheck its approved checks.')
-      const turn = await api<ChatTurn>(token, `${root}/tasks/${id}/runs`, { method: 'POST', signal, body: JSON.stringify({ request_id: requestID, prompt, action, mode, ...(ids ? { scenario_ids: ids } : {}), ...(action === 'rerun_failed' ? { source_run_id: source } : {}) }) })
+      const turn = await api<ChatTurn>(token, `${root}/tasks/${id}/runs`, { method: 'POST', signal, body: JSON.stringify({ request_id: requestID, prompt, action, mode: settings?.mode ?? mode, ...(settings && settings.target !== project.base_url ? { base_url: settings.target } : {}), ...(ids ? { scenario_ids: ids } : {}), ...(action === 'rerun_failed' ? { source_run_id: source } : {}) }) })
       if (currentTask.current === id) setTurns(previous => [...previous.filter(item => item.id !== turn.id), turn])
       if (action === 'rerun_failed' && initialRunContext) onContextUsed()
       onChanged()
@@ -212,14 +152,16 @@ export default function TaskWorkspace({ token, project, taskId, draftKey, journe
       setTurns(previous => [...page.turns.filter(turn => !previous.some(item => item.id === turn.id)), ...previous]); setHasOlder(page.has_older)
     } catch (err) { setError(errorText(err)) }
   }
-  return <div className="flow-page testing-layout">
+  const reviewingPlan = turns.some(turn => Boolean(turn.proposal?.scenarios.length))
+  useEffect(() => setShowHistory(false), [taskId, reviewingPlan])
+  return <div className={`flow-page testing-layout${reviewingPlan ? ' reviewing-plan' : ''}`}>
     <header className="page-heading testing-heading"><div><h1 ref={workspaceHeading} tabIndex={-1}>{journeys.find(item => item.id === task?.journey_id)?.name || task?.title || 'What would you like to test?'}</h1></div>
       <div className="heading-actions"><button ref={historyToggle} className="button button-outline history-toggle" aria-expanded={showHistory} aria-controls="recent-requests" onClick={() => setShowHistory(!showHistory)}><History size={16}/>Recent requests</button>
         <button className="button button-outline" disabled={busy} onClick={() => {onTask(''); setShowHistory(false); taskRequest.current = newRequestID()}}><Plus size={16}/>New test request</button></div>
     </header>
     <div className="testing-main">
     {error && <div className="error-banner" role="alert">{error}</div>}{loading && <p role="status">Loading saved conversation…</p>}
-    <div className="chat-thread">{hasOlder && <button className="link-button" onClick={() => void older()}>Load earlier messages</button>}{turns.map(turn => <article className="chat-exchange" key={turn.id}><div className="chat-user-message"><small>You · {formatDate(turn.created_at)}</small>{turn.proposal?.scenarios.length && turn.prompt.length > 450 ? <details className="request-preview"><summary>{turn.prompt.slice(0,150).replace(/\s+\S*$/, '')}… <span>Read full request</span></summary><p>{turn.prompt}</p></details> : <p>{turn.prompt}</p>}</div><div className="chat-agent-message"><div className="chat-agent-label"><Sparkles size={17} /><strong>QA Agent</strong>{turn.proposal && <small>{turn.proposal.model}</small>}</div>{turn.status === 'error' ? <PlanningRecovery turn={turn} disabled={busy} onRetry={text => setPrefill({text, id: Date.now()})} onSettings={onAISettings} /> : <p>{turn.status === 'pending' ? 'Preparing your test plan…' : turn.reply}</p>}{turn.proposal && <>{turn.proposal.questions.length > 0 && <div className="chat-questions"><strong>A few details before we test</strong><ol>{turn.proposal.questions.map((question, i) => <li key={i}>{question}</li>)}</ol></div>}{turn.proposal.assumptions.length > 0 && <details className="chat-assumptions"><summary>Assumptions to review ({turn.proposal.assumptions.length})</summary><ul>{turn.proposal.assumptions.map((item, i) => <li key={i}>{item}</li>)}</ul></details>}{task && <ReviewPlan mode={mode} onMode={setMode} token={token} project={project} task={task} turn={turn} scenarios={scenarios} busy={busy} onApproved={() => refresh(task.id)} onRevise={text => setPrefill({text, id: Date.now()})} onRun={(ids, requestID) => launch('Run the reviewed plan', 'selected', undefined, ids, requestID)} />}{(turn.proposal.discovery_id || turn.proposal.repository_snapshots?.length) ? <details className="chat-assumptions"><summary>Context used for this plan</summary>{turn.proposal.discovery_id && <p>Observed app pages from discovery {turn.proposal.discovery_id.slice(0, 8)}</p>}{turn.proposal.repository_snapshots?.map(source => <p key={source.id}>{source.repository} · {source.role} · {source.commit_sha.slice(0, 12)}</p>)}</details> : null}</>}{turn.run_id && <RunCard token={token} id={turn.run_id} onOpen={onOpenRun} />}</div></article>)}</div>
+    <div className="chat-thread">{hasOlder && <button className="link-button" onClick={() => void older()}>Load earlier messages</button>}{turns.map(turn => <article className="chat-exchange" key={turn.id}><div className="chat-user-message"><small>You · {formatDate(turn.created_at)}</small>{turn.proposal?.scenarios.length && turn.prompt.length > 450 ? <details className="request-preview"><summary>{turn.prompt.slice(0,150).replace(/\s+\S*$/, '')}… <span>Read full request</span></summary><p>{turn.prompt}</p></details> : <p>{turn.prompt}</p>}</div><div className="chat-agent-message"><div className="chat-agent-label"><Sparkles size={17} /><strong>QA Agent</strong>{turn.proposal && <small>{turn.proposal.model}</small>}</div>{turn.status === 'error' ? <PlanningRecovery turn={turn} disabled={busy} onRetry={text => setPrefill({text, id: Date.now()})} onSettings={onAISettings} /> : <p>{turn.status === 'pending' ? 'Preparing your test plan…' : turn.reply}</p>}{turn.proposal && <>{turn.proposal.questions.length > 0 && <div className="chat-questions"><strong>A few details before we test</strong><ol>{turn.proposal.questions.map((question, i) => <li key={i}>{question}</li>)}</ol></div>}{turn.proposal.assumptions.length > 0 && <details className="chat-assumptions"><summary>Assumptions to review ({turn.proposal.assumptions.length})</summary><ul>{turn.proposal.assumptions.map((item, i) => <li key={i}>{item}</li>)}</ul></details>}{task && <ReviewPlan defaultMode={mode} token={token} project={project} task={task} turn={turn} scenarios={scenarios} busy={busy} onApproved={() => refresh(task.id)} onRevise={text => setPrefill({text, id: Date.now()})} onRun={(ids, requestID, settings) => launch('Run the reviewed plan', 'selected', undefined, ids, requestID, settings)} />}{(turn.proposal.discovery_id || turn.proposal.repository_snapshots?.length) ? <details className="chat-assumptions"><summary>Context used for this plan</summary>{turn.proposal.discovery_id && <p>Observed app pages from discovery {turn.proposal.discovery_id.slice(0, 8)}</p>}{turn.proposal.repository_snapshots?.map(source => <p key={source.id}>{source.repository} · {source.role} · {source.commit_sha.slice(0, 12)}</p>)}</details> : null}</>}{turn.run_id && <RunCard token={token} id={turn.run_id} onOpen={onOpenRun} />}</div></article>)}</div>
     {progress && <div className="flow-progress" role="status"><LoaderCircle className="spin" size={18} />{progress}</div>}
 
     {initialRunContext && <div className="flow-card">Attached run · {attachedRun ? `${attachedRun.scenarios[0]?.name || 'App checks'} · ${attachedRun.status} · ${attachedRun.base_url} · ${formatDate(attachedRun.created_at)}` : initialRunContext}<button className="link-button" onClick={onContextUsed}>Remove run context</button></div>}

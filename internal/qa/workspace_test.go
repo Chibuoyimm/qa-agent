@@ -64,6 +64,10 @@ func TestWorkspaceApprovalCoverageAndFrozenRecheck(t *testing.T) {
 	if err != nil || len(scenarios) != 1 || scenarios[0].JourneyID != task.JourneyID {
 		t.Fatalf("duplicate or ungrouped checks: %+v %v", scenarios, err)
 	}
+	invalidTarget := qa.ChatRunInput{TaskID: task.ID, RequestID: strings.Repeat("d", 32), Prompt: "Run approved checks", Action: "selected", ScenarioIDs: approval.ScenarioIDs, Mode: "advisory", BaseURL: "https://unknown.test"}
+	if _, err := store.CreateChatRun(ctx, project.ID, invalidTarget, "invalid"); !errors.Is(err, qa.ErrInvalid) {
+		t.Fatalf("unexpected result for an unconfigured deployment: %v", err)
+	}
 	turn, err := store.CreateChatRun(ctx, project.ID, qa.ChatRunInput{TaskID: task.ID, RequestID: strings.Repeat("e", 32), Prompt: "Run approved checks", Action: "selected", ScenarioIDs: approval.ScenarioIDs, Mode: "advisory"}, "run")
 	if err != nil {
 		t.Fatal(err)

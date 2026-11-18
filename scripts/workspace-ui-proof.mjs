@@ -55,7 +55,7 @@ export async function verifyReleaseDiscussionAndSource(page, release, apiToken) 
 export async function verifyWorkspaceUI(page, api, templates, goodURL, badURL, waitRun, evidence, apiToken, insertFixtureTurn) {
   await page.unroute('**/api/ai/config');
   await page.route('**/api/ai/config', route => route.fulfill({ json: {provider:'openai',models:['workspace-fixture'],managed_available:false,byok_available:true} }));
-  const app = await api('/api/projects',{name:'Task workspace proof',base_url:badURL});
+  const app = await api('/api/projects',{name:'Task workspace proof',base_url:goodURL});
   let setup;
   await api(`/api/projects/${app.id}/journeys`,{name:'Permissions'});
   await api(`/api/projects/${app.id}/journeys`,{name:'Invitations'});
@@ -151,9 +151,21 @@ export async function verifyWorkspaceUI(page, api, templates, goodURL, badURL, w
   await page.getByRole('checkbox',{name:/I agree to send this message/}).check();
   await page.getByRole('button',{name:'Draft test plan',exact:true}).click();
   await page.getByRole('heading',{name:'3 checks selected',exact:true}).waitFor();
+  const plan = page.getByRole('region',{name:'Review the plan',exact:true});
+  assert.equal(await page.getByRole('complementary',{name:'Recent requests'}).isVisible(),false,'Opening a plan gives the review the full width');
+  await page.getByRole('button',{name:'Recent requests',exact:true}).click();
+  await page.getByRole('complementary',{name:'Recent requests'}).waitFor();
+  await page.keyboard.press('Escape');
+  assert.equal(await plan.getByRole('textbox').count(),0,'Checks start in reading mode');
+  await plan.getByRole('button',{name:'Change run settings'}).click();
+  await plan.getByLabel('Deployment target').selectOption(badURL);
+  await plan.getByLabel('Release policy').selectOption('blocking');
+  await plan.getByRole('button',{name:'Done changing run settings'}).click();
+  const editOrders = plan.getByRole('button',{name:`Edit ${templates[1].name}`,exact:true});
+  await editOrders.click();
   await page.getByRole('checkbox',{name:`3. ${templates[2].name}`,exact:true}).uncheck();
   const reviewedOutcome='Check that dashboard orders reads “3 orders”.';
-  await page.getByRole('textbox',{name:'Expected outcome',exact:true}).nth(1).fill(reviewedOutcome);
+  await page.getByRole('textbox',{name:'Expected outcome',exact:true}).fill(reviewedOutcome);
   await page.getByRole('heading',{name:'2 checks selected',exact:true}).waitFor();
   assert.equal(await page.getByRole('button',{name:'Approve & run 2 checks',exact:true}).isEnabled(),false,'Prose-only changes cannot run old assertions');
   await page.getByRole('textbox',{name:'Exact text for dashboard-orders',exact:true}).fill('3 orders');
@@ -162,8 +174,10 @@ export async function verifyWorkspaceUI(page, api, templates, goodURL, badURL, w
   await page.getByLabel('Workspace access token',{exact:true}).fill(apiToken);
   await page.getByRole('button',{name:'Open workspace',exact:true}).click();
   await page.getByRole('heading',{name:'2 checks selected',exact:true}).waitFor();
-  assert.equal(await page.getByRole('textbox',{name:'Expected outcome',exact:true}).nth(1).inputValue(),reviewedOutcome,'Unapproved review edits survive reload');
-  await page.getByRole('checkbox',{name:'I reviewed the revised outcomes and the exact assertions shown above.',exact:true}).check();
+  assert.ok((await plan.innerText()).includes(badURL),'Reviewed deployment survives reload');
+  await editOrders.click();
+  assert.equal(await plan.getByRole('textbox',{name:'Expected outcome',exact:true}).inputValue(),reviewedOutcome,'Unapproved review edits survive reload');
+  await page.getByRole('checkbox',{name:'I reviewed the updated outcomes and browser assertions.',exact:true}).check();
   await page.getByRole('button',{name:'Approve & run 2 checks',exact:true}).click();
   const taskID=new URLSearchParams(page.url().split('?')[1]).get('task');
   let first;
@@ -174,6 +188,8 @@ export async function verifyWorkspaceUI(page, api, templates, goodURL, badURL, w
     await new Promise(resolve=>setTimeout(resolve,100));
   }
   assert.equal(first?.status,'failed');
+  assert.equal(first.base_url,badURL,'Run uses the deployment chosen in review');
+  assert.equal(first.mode,'blocking','Run uses the policy shown in review');
   assert.equal(first.scenarios.length,2);
   assert.equal(first.scenarios[1].expected_outcome,reviewedOutcome);
   await page.getByRole('button',{name:'Open results and evidence',exact:true}).click();

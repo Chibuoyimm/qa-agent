@@ -215,6 +215,7 @@ func (s *Store) FailChat(ctx context.Context, projectID, id, reply string, failu
 }
 
 type ChatRunInput struct {
+	BaseURL     string   `json:"base_url,omitempty"`
 	TaskID      string   `json:"task_id,omitempty"`
 	RequestID   string   `json:"request_id"`
 	Prompt      string   `json:"prompt"`
@@ -235,6 +236,16 @@ func (s *Store) CreateChatRun(ctx context.Context, projectID string, in ChatRunI
 	}
 	if in.Mode != "advisory" && in.Mode != "blocking" {
 		return ChatTurn{}, fmt.Errorf("%w: choose advisory or blocking mode", ErrInvalid)
+	}
+	if in.BaseURL != "" {
+		if in.Action != "selected" || in.TaskID == "" {
+			return ChatTurn{}, fmt.Errorf("%w: choose a deployment when running a reviewed task plan", ErrInvalid)
+		}
+		target, err := ValidateProject(ProjectInput{Name: "Reviewed plan", BaseURL: in.BaseURL}, s.allowed)
+		if err != nil {
+			return ChatTurn{}, err
+		}
+		in.BaseURL = target.BaseURL
 	}
 	switch in.Action {
 	case "all_approved":
@@ -350,6 +361,9 @@ func (s *Store) CreateChatRun(ctx context.Context, projectID string, in ChatRunI
 			return ChatTurn{}, err
 		}
 	} else {
+		if in.BaseURL != "" {
+			baseURL = in.BaseURL
+		}
 		if _, err := createRunTx(ctx, tx, runID, projectID, baseURL, RunInput{Mode: in.Mode, ScenarioIDs: ids}); err != nil {
 			return ChatTurn{}, err
 		}

@@ -8,7 +8,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"path"
+	"slices"
 	"strings"
 	"time"
 
@@ -23,6 +25,10 @@ type Store struct {
 
 func NewStore(db *pgxpool.Pool, allowed map[string]bool) *Store {
 	return &Store{db: db, allowed: allowed}
+}
+
+func (s *Store) RunTargets() []string {
+	return slices.Sorted(maps.Keys(s.allowed))
 }
 
 func newID() (string, error) {
