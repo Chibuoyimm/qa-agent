@@ -1,10 +1,16 @@
 # Testing conversations
 
-Open **Chat** inside a project to request checks for a feature or user journey. Select an AI connection under **App context & AI connection**; existing ChatGPT, OpenCode Go, managed and transient API-key access use the same generation rules as the scenario workspace. A connected, sharing-enabled ChatGPT account is selected initially when available.
+Open **Test** inside a project to request checks for a feature or user journey. Select an AI connection under **App context & AI connection**; existing ChatGPT, OpenCode Go, managed and transient API-key access use the same generation rules as the scenario workspace. A connected, sharing-enabled ChatGPT account is selected initially when available.
 
 Messages can begin without application context. In that case the model is instructed to ask for missing requirements, paths and test IDs. Supply answers in the next message, or add requirements to the context field. Reviewed repository snapshots and browser discovery observations can be selected under **Review source context**. Discovery remains a separate bounded browser operation; sending a drafting message does not browse the target.
 
 The model returns questions, assumptions and unapproved draft checks. **Review check** opens the existing editor with approval off. Saving an approved check requires confirming its expected outcome and assertions. A saved approved check can run directly from the conversation. Original draft messages remain draft evidence; saving a check does not rewrite the original model response. All approved checks also remain available in Scenarios.
+
+## Whole-app requests
+
+Type **“test the whole app end to end”**. The request automatically selects **Discover journeys across all project repositories**. You can also select this option for a differently worded request. Connect repositories once under **Settings → Repositories**. GitHub and Azure Repos, multiple frontends, and multiple backends can participate in the same plan.
+
+After consent, the agent inventories each repository at its configured ref, reads relevant files at a fixed commit, and infers user journeys. It combines related frontend and backend evidence in one plan. The review shows the files used, which journeys have proposed checks, and which journeys or requirements still lack coverage. A saved import used in place of a live read is labelled. The plan uses the project’s configured app URL and can reuse its saved browser access verification. Journeys that require another deployment should be flagged during review. Select the checks to approve and run together, then open results for the outcome of each check.
 
 ## Commands and results
 

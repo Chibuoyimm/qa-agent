@@ -85,6 +85,7 @@ func run(logger *slog.Logger) error {
 	proposals.ChatGPT = subscription
 	proposals.OpenCode = openCode
 	api := httpapi.New(qa.NewStore(db, allowed), proposals, repository.New(nil), apiToken, workerToken, logger)
+	api.RepositoryKey = repositoryKey
 	api.ArtifactDirectory = os.Getenv("QA_ARTIFACT_DIR")
 	api.FixtureProfiles, err = qa.LoadFixtureProfiles(os.Getenv("QA_FIXTURE_CONFIG"))
 	if err != nil {

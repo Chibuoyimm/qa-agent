@@ -224,7 +224,7 @@ func (p *Planner) postJSON(ctx context.Context, url string, body []byte, headers
 }
 
 func outputLimit(in Input) int {
-	if in.Journey {
+	if in.Journey || in.WholeApp {
 		return 16000
 	}
 	return 6000

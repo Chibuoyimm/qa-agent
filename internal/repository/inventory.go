@@ -18,6 +18,7 @@ type Candidate struct {
 type Inventory struct {
 	CommitSHA string      `json:"commit_sha"`
 	Files     []Candidate `json:"files"`
+	Partial   bool        `json:"partial,omitempty"`
 	Excluded  int         `json:"excluded"`
 }
 
@@ -25,6 +26,31 @@ type Inventory struct {
 // model selection; generated directories, secrets, oversized files and binary
 // formats are excluded. No partial tree is represented as a complete search.
 func (c *Client) Inventory(ctx context.Context, in Input, token string) (Inventory, error) {
+	return c.inventory(ctx, in, token, false)
+}
+
+func (c *Client) SurveyInventory(ctx context.Context, in Input, token string) (Inventory, error) {
+	return c.inventory(ctx, in, token, true)
+}
+func (c *Client) Resolve(ctx context.Context, in Input, token string) error {
+	if err := validateConnection(in, token); err != nil {
+		return err
+	}
+	select {
+	case c.slots <- struct{}{}:
+		defer func() { <-c.slots }()
+	default:
+		return ErrBusy
+	}
+	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	defer cancel()
+	in.Provider = EffectiveProvider(in.Provider)
+	base := in.apiBase()
+	budget := requestBudget{}
+	_, _, err := c.resolveCommit(ctx, base, in, token, &budget)
+	return err
+}
+func (c *Client) inventory(ctx context.Context, in Input, token string, allowPartial bool) (Inventory, error) {
 	if err := validateConnection(in, token); err != nil {
 		return Inventory{}, err
 	}
@@ -37,10 +63,7 @@ func (c *Client) Inventory(ctx context.Context, in Input, token string) (Invento
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
 	in.Provider = EffectiveProvider(in.Provider)
-	base := "https://api.github.com/repos/" + in.Repository
-	if in.Provider == "azure" {
-		base, _ = azureBase(in.Repository)
-	}
+	base := in.apiBase()
 	budget := requestBudget{}
 	commit, root, err := c.resolveCommit(ctx, base, in, token, &budget)
 	if err != nil {
@@ -53,10 +76,15 @@ func (c *Client) Inventory(ctx context.Context, in Input, token string) (Invento
 	}
 	pending := []directory{{sha: root}}
 	bytes := 0
+scan:
 	for len(pending) > 0 {
 		dir := pending[0]
 		pending = pending[1:]
 		if budget.requests >= maxAPIRequests || dir.depth > 19 {
+			if allowPartial {
+				result.Partial = true
+				break scan
+			}
 			return Inventory{}, ErrInventoryLimit
 		}
 		tree, err := c.fetchTree(ctx, base, in.Provider, dir.sha, token, &budget)
@@ -80,6 +108,11 @@ func (c *Client) Inventory(ctx context.Context, in Input, token string) (Invento
 			if entry.Type == "tree" && (entry.Mode == "040000" || entry.Mode == "40000") {
 				pending = append(pending, directory{filename + "/", entry.SHA, dir.depth + 1})
 				if len(pending) > maxAPIRequests {
+					if allowPartial {
+						result.Partial = true
+						pending = pending[:maxAPIRequests]
+						continue
+					}
 					return Inventory{}, ErrInventoryLimit
 				}
 				continue
@@ -90,12 +123,16 @@ func (c *Client) Inventory(ctx context.Context, in Input, token string) (Invento
 			}
 			bytes += len(filename) + 40
 			if len(result.Files) >= 2000 || bytes > 55000 {
+				if allowPartial {
+					result.Partial = true
+					break scan
+				}
 				return Inventory{}, ErrInventoryLimit
 			}
 			result.Files = append(result.Files, Candidate{filename, entry.Size})
 		}
 	}
-	if len(result.Files) == 0 {
+	if len(result.Files) == 0 && !allowPartial {
 		return Inventory{}, ErrInvalid
 	}
 	sort.Slice(result.Files, func(i, j int) bool { return result.Files[i].Path < result.Files[j].Path })

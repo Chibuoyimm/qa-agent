@@ -26,7 +26,7 @@ let containerCreated = false;
 const manifest = { started_at: new Date().toISOString(), container, processes: [], runs: [], cleanup: false };
 const command = (cmd, args, options = {}) => {
   const result = spawnSync(cmd, args, { cwd: root, encoding: 'utf8', ...options });
-  if (result.error || result.status !== 0) throw new Error(`${cmd} failed: ${result.stderr || result.error}`);
+  if (result.error || result.status !== 0) throw new Error(`${cmd} failed: ${result.stderr || result.stdout || result.error}`);
   return result.stdout.trim();
 };
 const port = async () => {
@@ -89,6 +89,14 @@ try {
     QA_ANTHROPIC_MODELS: '', QA_ANTHROPIC_API_KEY: '', QA_ANTHROPIC_WORKSPACE_ID: '', QA_GEMINI_MODELS: '', QA_GEMINI_API_KEY: '',
     QA_OPENCODE_ENABLED: 'false',
   };
+  // Serve the production UI with the real API and worker in the whole-app proof.
+  // Only the Git provider and model calls are substituted.
+  const builtWeb = resolve(evidence, 'whole-app-web');
+  command(process.execPath, ['web/node_modules/vite/bin/vite.js', 'build', 'web', '--outDir', builtWeb]);
+  command('go', ['test', '-count=1', '-run', '^TestWholeApp$', './internal/httpapi'], {
+    env: {...process.env, TEST_DATABASE_URL:env.DATABASE_URL, QA_VERIFY_WHOLE_APP_BROWSER:'1', QA_WHOLE_APP_WEB_DIR:builtWeb},
+  });
+  observations.push({name:'Empty project to connected frontend and backend, source discovery, one reviewed plan and two passing browser journeys',status:'passed'});
   let server = await start('api', resolve(evidence, 'server'), [], env);
   const good = await start('sample-healthy', process.execPath, ['sample/server.js'], { ...env, PORT: String(goodPort), QA_SAMPLE_DEFECT: '0' });
   const bad = await start('sample-faulty', process.execPath, ['sample/server.js'], { ...env, PORT: String(badPort), QA_SAMPLE_DEFECT: '1' });

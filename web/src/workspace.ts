@@ -111,3 +111,12 @@ export function journeyStages(steps: Step[], result: Run['results'][number] | un
   return {...group,status,passed,total:records.length}
  })
 }
+
+
+export const noProjectRepositories = 'Connect a repository to let QA Agent discover this app’s journeys.'
+
+export function requestsWholeApp(prompt: string) {
+  const text = prompt.toLowerCase().replace(/[’']/g, '').replace(/[-–]/g, ' ')
+  return !/\b(?:dont|do not|avoid|skip)\s+(?:test(?:ing)?\s+)?(?:the\s+)?(?:whole|entire|full)\b/.test(text) &&
+    /\b(?:(?:whole|entire|full)\s+(?:app(?:lication)?|platform|product|system|site|website)|(?:all|every)\s+(?:(?:the|user|customer|project|main|critical)\s+)*(?:journeys?|flows?|workflows?|repos(?:itories)?)|app wide|end to end across the app)\b/.test(text)
+}

@@ -20,6 +20,7 @@ import (
 )
 
 type API struct {
+	RepositoryKey     func() ([]byte, error)
 	FixtureProfiles   []qa.FixtureProfile
 	ArtifactDirectory string
 	store             *qa.Store
@@ -100,6 +101,11 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("GET /api/projects/{id}/chat", a.authorize(a.apiToken, a.listChat))
 	mux.Handle("POST /api/projects/{id}/chat", a.authorize(a.apiToken, a.chatProposal))
 	mux.Handle("POST /api/projects/{id}/chat/runs", a.authorize(a.apiToken, a.chatRun))
+	mux.Handle("POST /api/projects/{id}/repository-sources", a.authorize(a.apiToken, a.connectSource))
+	mux.Handle("DELETE /api/projects/{id}/repository-sources/{source}", a.authorize(a.apiToken, a.disconnectSource))
+	mux.Handle("DELETE /api/projects/{id}/repository-sources/{source}/credential", a.authorize(a.apiToken, a.forgetSourceCredential))
+	mux.Handle("GET /api/projects/{id}/repository-sources", a.authorize(a.apiToken, a.projectSources))
+	mux.Handle("POST /api/projects/{id}/tasks/{task_id}/source-surveys/{batch}/{source}", a.authorize(a.apiToken, a.surveyRepository))
 	mux.Handle("POST /api/projects/{id}/repositories/search", a.authorize(a.apiToken, a.searchRepository))
 	mux.Handle("POST /api/projects/{id}/repositories/sync", a.authorize(a.apiToken, a.syncRepository))
 	mux.Handle("GET /api/projects/{id}/repositories", a.authorize(a.apiToken, a.listRepositories))
@@ -113,9 +119,9 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("POST /api/worker/discoveries/{id}/complete", a.authorize(a.workerToken, a.completeDiscovery))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		deadline := 25 * time.Second
-		if r.Method == http.MethodPost && (strings.HasSuffix(r.URL.Path, "/proposals") || strings.HasSuffix(r.URL.Path, "/chat")) {
+		if r.Method == http.MethodPost && (strings.HasSuffix(r.URL.Path, "/proposals") || strings.HasSuffix(r.URL.Path, "/chat") || strings.Contains(r.URL.Path, "/source-surveys/")) {
 			deadline = 370 * time.Second
-		} else if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/repositories/sync") {
+		} else if r.Method == http.MethodPost && (strings.HasSuffix(r.URL.Path, "/repositories/sync") || strings.HasSuffix(r.URL.Path, "/repository-sources")) {
 			deadline = 50 * time.Second
 		} else if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/repositories/search") {
 			deadline = 185 * time.Second
@@ -261,6 +267,10 @@ func (a *API) propose(w http.ResponseWriter, r *http.Request) {
 	}
 	key := r.Header.Get("X-QA-Provider-Key")
 	in.WorkspaceID = r.Header.Get("X-QA-Anthropic-Workspace")
+	if in.WholeApp {
+		a.fail(w, fmt.Errorf("%w: use a task to plan the whole app", qa.ErrInvalid))
+		return
+	}
 	in, selected, err := a.prepareProposal(r.Context(), r.PathValue("id"), in, key)
 	if err != nil {
 		a.fail(w, err)
@@ -286,6 +296,16 @@ func (a *API) prepareProposal(ctx context.Context, projectID string, in planner.
 	if err != nil {
 		return in, nil, err
 	}
+	if in.WholeApp {
+		in.Context += "\nProject test target: " + project.BaseURL + ". Each run uses one target. Flag journeys requiring a different deployment or missing access."
+		if in.DiscoveryID == "" && in.FixtureID == "" {
+			access, err := a.store.GetVerifiedAccess(ctx, projectID)
+			if err != nil {
+				return in, nil, err
+			}
+			in.DiscoveryID = access.DiscoveryID
+		}
+	}
 	if in.FixtureID != "" {
 		found := false
 		for _, profile := range a.FixtureProfiles {
@@ -301,7 +321,7 @@ func (a *API) prepareProposal(ctx context.Context, projectID string, in planner.
 				}
 			}
 		}
-		if !in.Journey || !found {
+		if (!in.Journey && !in.WholeApp) || !found {
 			return in, nil, fmt.Errorf("%w: select an available fixture for this journey's origin", planner.ErrInvalid)
 		}
 	}

@@ -33,7 +33,8 @@ type transportFunc func(*http.Request) (*http.Response, error)
 
 func (f transportFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
-func TestHTTPBoundary(t *testing.T) {
+func boundaryDB(t *testing.T) *pgxpool.Pool {
+	t.Helper()
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("TEST_DATABASE_URL is not set")
@@ -70,6 +71,11 @@ func TestHTTPBoundary(t *testing.T) {
 	if err := migrations.Apply(ctx, testDB); err != nil {
 		t.Fatal(err)
 	}
+	return testDB
+}
+func TestHTTPBoundary(t *testing.T) {
+	ctx := context.Background()
+	testDB := boundaryDB(t)
 	proposals, err := planner.New("", "", nil)
 	if err != nil {
 		t.Fatal(err)

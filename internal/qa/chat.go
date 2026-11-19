@@ -14,6 +14,7 @@ import (
 
 // Proposal is an unapproved draft, shared by generation and conversation history.
 type Proposal struct {
+	WholeApp            *WholeAppPlan       `json:"whole_app,omitempty"`
 	CredentialMode      string              `json:"credential_mode"`
 	ChatGPTProfileID    string              `json:"chatgpt_profile_id,omitempty"`
 	Provider            string              `json:"provider"`

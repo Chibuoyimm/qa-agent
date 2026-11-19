@@ -207,7 +207,14 @@ export type ChatGptStatus = {
 export type ChatGptModel = { slug: string; display_name: string }
 export type ChatGptLogin = { id: string; auth_url: string; expires_at: string }
 
+export type ProjectSource = {id: string; repository: string; provider: RepositoryProvider; role: RepositoryRole; ref: string; has_saved_access: boolean}
+export type SourceSurvey = {
+  source_id: string; repository: string; provider: string; role: string; ref: string; commit_sha: string
+  eligible_files?: number; status: 'live' | 'saved' | 'no_files' | 'unavailable'; note?: string; paths: string[]
+  journeys: {name: string; evidence: string; paths: string[]}[]; gaps: string[]
+}
 export type AiProposalResponse = {
+  whole_app?: {sources: SourceSurvey[]; coverage: string[][]}
   provider: AiProvider
   model: string
   credential_mode?: string

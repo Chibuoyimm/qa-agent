@@ -41,6 +41,7 @@ func (a *API) listChat(w http.ResponseWriter, r *http.Request) {
 }
 
 type chatProposalInput struct {
+	SurveyBatch string `json:"survey_batch,omitempty"`
 	planner.Input
 	RequestID    string `json:"request_id"`
 	RunContextID string `json:"run_context_id,omitempty"`
@@ -87,6 +88,22 @@ func (a *API) chatProposal(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	in := request.Input
+	var surveys []qa.SourceSurvey
+	if in.WholeApp {
+		if !in.Consent || in.Journey {
+			a.fail(w, qa.ErrInvalid)
+			return
+		}
+		var err error
+		surveys, err = a.wholeAppSources(r.Context(), r.PathValue("id"), taskID, request.SurveyBatch)
+		if err != nil {
+			a.fail(w, err)
+			return
+		}
+		if strings.TrimSpace(in.Context) == "" {
+			in.Context = "Plan the app's user-facing functional journeys."
+		}
+	}
 	if request.RunContextID != "" {
 		run, err := a.store.GetRun(r.Context(), request.RunContextID)
 		if err != nil {
@@ -151,16 +168,39 @@ func (a *API) chatProposal(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, err)
 		return
 	}
+	var journeyRefs map[string]bool
+	if in.WholeApp {
+		in.Context, journeyRefs, err = wholeAppContext(in.Context, surveys)
+		if err != nil {
+			planningErr = err
+			a.fail(w, err)
+			return
+		}
+	}
 	if err := a.planner.Validate(in, key); err != nil {
 		planningErr = err
 		a.fail(w, err)
 		return
 	}
-	result, err := a.planner.Propose(r.Context(), in, key)
+	var result qa.Proposal
+	if in.WholeApp && len(journeyRefs) == 0 {
+		hash := sha256.Sum256([]byte(in.Context))
+		result = qa.Proposal{Provider: in.Provider, Model: in.Model, CredentialMode: in.CredentialMode, ChatGPTProfileID: in.ChatGPTProfileID, ContextSHA256: hex.EncodeToString(hash[:]), Scenarios: []qa.ScenarioInput{}, Questions: []string{"No runnable journey could be grounded in the source. Can you check the repository access and refs in Settings, or connect the repository that implements the user flow?"}, Assumptions: []string{}, WholeApp: &qa.WholeAppPlan{Coverage: [][]string{}}}
+	} else {
+		result, err = a.planner.Propose(r.Context(), in, key)
+	}
 	if err != nil {
 		planningErr = err
 		a.fail(w, err)
 		return
+	}
+	if in.WholeApp {
+		if err := validateWholeAppCoverage(result.WholeApp, journeyRefs); err != nil {
+			planningErr = err
+			a.fail(w, err)
+			return
+		}
+		result.WholeApp.Sources = surveys
 	}
 	result.RepositorySnapshots = sources
 	result.DiscoveryID = in.DiscoveryID

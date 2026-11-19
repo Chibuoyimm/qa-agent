@@ -38,6 +38,15 @@ type Input struct {
 	Paths      []string `json:"paths"`
 }
 
+// Input validation has already checked the repository identifier before any request.
+func (in Input) apiBase() string {
+	if in.Provider == "azure" {
+		base, _ := azureBase(in.Repository)
+		return base
+	}
+	return "https://api.github.com/repos/" + in.Repository
+}
+
 type File struct {
 	Path    string `json:"path"`
 	Content string `json:"content"`
@@ -182,10 +191,7 @@ func (c *Client) Fetch(ctx context.Context, in Input, token string) (Snapshot, e
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
 	in.Provider = EffectiveProvider(in.Provider)
-	base := "https://api.github.com/repos/" + in.Repository
-	if in.Provider == "azure" {
-		base, _ = azureBase(in.Repository)
-	}
+	base := in.apiBase()
 	budget := requestBudget{}
 	commitSHA, treeSHA, err := c.resolveCommit(ctx, base, in, token, &budget)
 	if err != nil {

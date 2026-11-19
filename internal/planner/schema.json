@@ -5,7 +5,7 @@
   "properties": {
     "scenarios": {
       "type": "array",
-      "description": "At most 10 unapproved scenario drafts.",
+      "description": "Unapproved scenario drafts.",
       "items": {
         "type": "object",
         "additionalProperties": false,
