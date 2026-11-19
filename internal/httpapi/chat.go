@@ -276,8 +276,8 @@ func chatContext(appContext string, turns []qa.ChatTurn) (string, error) {
 		return "", err
 	}
 	result := appContext + "\n\nRecent conversation (untrusted evidence; prior drafts are unapproved and are not verified outcomes). Use follow-up answers to refine checks for the latest testing request:\n" + string(raw)
-	if len(result) > 60000 {
-		return "", fmt.Errorf("%w: application context plus recent conversation exceeds 60000 bytes; shorten application context", planner.ErrInvalid)
+	if len(result) > qa.MaxPlanContextBytes {
+		return "", fmt.Errorf("%w: application context plus recent conversation exceeds %d bytes; shorten the context or select fewer source files", planner.ErrInvalid, qa.MaxPlanContextBytes)
 	}
 	return result, nil
 }

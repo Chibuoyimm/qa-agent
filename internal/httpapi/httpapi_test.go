@@ -271,9 +271,9 @@ func TestHTTPBoundary(t *testing.T) {
 		return string(encoded)
 	}
 	for name, ids := range map[string][]string{
-		"duplicate": {snapshot.ID, snapshot.ID},
-		"missing":   {"missing"},
-		"too many":  {snapshot.ID, "other", "third"},
+		"duplicate":   {snapshot.ID, snapshot.ID},
+		"missing":     {"missing"},
+		"one missing": {snapshot.ID, "other"},
 	} {
 		response, content := sendProposal(guardServer.URL, proposalJSON("", ids))
 		if response.StatusCode != 400 {

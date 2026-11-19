@@ -382,8 +382,8 @@ func assembleProposalContext(operatorContext string, selected []qa.RepositorySna
 		b.Write(encoded)
 		b.WriteByte('\n')
 	}
-	if b.Len() > 60000 {
-		return "", fmt.Errorf("%w: assembled context exceeds 60000 bytes", planner.ErrInvalid)
+	if b.Len() > qa.MaxPlanContextBytes {
+		return "", fmt.Errorf("%w: combined test context exceeds %d bytes; select fewer source files or shorten the application context", planner.ErrInvalid, qa.MaxPlanContextBytes)
 	}
 	return b.String(), nil
 }

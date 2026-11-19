@@ -63,13 +63,26 @@ func TestRepositorySnapshotsAreScopedAndImmutable(t *testing.T) {
 	if _, err := store.SelectRepositorySnapshots(ctx, first.ID, []string{old.ID, old.ID}); !errors.Is(err, qa.ErrInvalid) {
 		t.Fatalf("duplicate ID: %v", err)
 	}
-	if _, err := store.SelectRepositorySnapshots(ctx, first.ID, []string{old.ID, newer.ID}); !errors.Is(err, qa.ErrInvalid) {
-		t.Fatalf("duplicate role: %v", err)
-	}
-	if _, err := store.SelectRepositorySnapshots(ctx, first.ID, []string{old.ID, newer.ID, "third"}); !errors.Is(err, qa.ErrInvalid) {
-		t.Fatalf("too many IDs: %v", err)
+	selected, err := store.SelectRepositorySnapshots(ctx, first.ID, []string{newer.ID, old.ID})
+	if err != nil || len(selected) != 2 || selected[0].ID != newer.ID || selected[1].ID != old.ID {
+		t.Fatalf("selected revisions in request order: %+v %v", selected, err)
 	}
 	if _, err := store.SelectRepositorySnapshots(ctx, first.ID, []string{"missing"}); !errors.Is(err, qa.ErrInvalid) {
 		t.Fatalf("missing ID: %v", err)
 	}
+	imported.Files[0].Content = strings.Repeat("x", qa.MaxPlanContextBytes/2+1)
+	imported.TotalBytes = len(imported.Files[0].Content)
+	var largeIDs []string
+	for _, repo := range []string{"team/orders", "team/payments"} {
+		imported.Repository = repo
+		snapshot, err := store.CreateRepositorySnapshot(ctx, first.ID, imported)
+		if err != nil {
+			t.Fatal(err)
+		}
+		largeIDs = append(largeIDs, snapshot.ID)
+	}
+	if _, err := store.SelectRepositorySnapshots(ctx, first.ID, largeIDs); !errors.Is(err, qa.ErrInvalid) {
+		t.Fatalf("oversized combined source: %v", err)
+	}
+
 }

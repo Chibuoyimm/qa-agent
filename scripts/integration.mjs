@@ -226,7 +226,7 @@ try {
     const bytes = sourceFiles.reduce((sum, file) => sum + Buffer.byteLength(file.content), 0);
     const literal = value => `'${String(value).replaceAll("'", "''")}'`;
     command('docker', ['exec', container, 'psql', '-U', 'qa', '-d', 'qa_proof', '-v', 'ON_ERROR_STOP=1', '-c',
-      `INSERT INTO repository_snapshots(id,project_id,repository,ref,role,commit_sha,content_sha256,files,file_count,total_bytes) VALUES (${[id, healthy.project.id, spec.repository, spec.commit_sha, spec.role, spec.commit_sha, hash.digest('hex'), JSON.stringify(sourceFiles)].map(literal).join(',')},${sourceFiles.length},${bytes})`]);
+      `INSERT INTO repository_snapshots(id,project_id,repository,ref,role,commit_sha,content_sha256,files,file_count,total_bytes) VALUES (${[id, spec.project_id ?? healthy.project.id, spec.repository, spec.commit_sha, spec.role, spec.commit_sha, hash.digest('hex'), JSON.stringify(sourceFiles)].map(literal).join(',')},${sourceFiles.length},${bytes})`]);
     return { snapshot_id: id, repository: spec.repository, role: spec.role, commit_sha: spec.commit_sha };
   };
   const sourceInputs = process.env.QA_PROOF_GITHUB === '1' ? null : await Promise.all(sourceSpecs.map(seedSnapshot));
@@ -428,7 +428,7 @@ try {
     assert.equal(await testMessage.inputValue(),'Test login');
     await page.getByText('hello',{exact:true}).filter({visible:true}).waitFor();
     await page.getByRole('button',{name:'Use this reviewed snapshot',exact:true}).click();
-    await page.getByRole('button',{name:'Selected for proposal',exact:true}).waitFor();
+    await page.getByRole('button',{name:/Remove fixture\/app at .* from plan/}).waitFor();
     assert.equal(await page.getByRole('checkbox',{name:/I agree to send this message/}).isChecked(),false);
     await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('button', { name: 'Settings', exact: true }).click();
     await page.getByRole('button',{name:'Repositories',exact:true}).click();
@@ -477,7 +477,7 @@ try {
       command('docker',['exec',container,'psql','-U','qa','-d','qa_proof','-c',`INSERT INTO chat_turns(id,project_id,task_id,fingerprint,prompt,status,reply,proposal,failure)
         SELECT data->>'id',data->>'project_id',data->>'task_id','synthetic-inference',data->>'prompt',COALESCE(data->>'status','completed'),COALESCE(data->>'reply','Review the proposed checks.'),data->'proposal',data->'failure'
         FROM (SELECT convert_from(decode('${hex}','hex'),'UTF8')::jsonb data) fixture`]);
-    }));
+    }, (projectID, repository, role) => seedSnapshot({project_id:projectID, repository, role, commit_sha:sourceRevision, paths:['sample/README.md']})));
     assert.deepEqual(errors, [], 'AI proposal flow must not throw browser errors');
     assert.equal(await page.evaluate(token => JSON.stringify({...localStorage,...sessionStorage}).includes(token), apiToken), false, 'Operator token must not enter browser storage');
     await page.reload();

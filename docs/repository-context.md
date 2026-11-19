@@ -32,7 +32,7 @@ Authentication currently uses an import-only PAT, matching this local pilot's tr
 
 ## Proposals
 
-Existing proposal input gains optional `repository_snapshot_ids: string[]` (at most two, unique, same project, at most one per role). `context` may be empty only when snapshots are selected. The server builds one bounded context from operator context and snapshot headers/files; validation and consent apply to that final text. The response adds `repository_snapshots`, containing the selected summaries. The existing `context_sha256` hashes the complete context actually sent. No server-side latest-ref lookup can silently replace a selected snapshot.
+A proposal can include `repository_snapshot_ids: string[]` with unique snapshots from the same project, in selection order. One plan can use multiple frontend and backend repositories from GitHub and Azure Repos. All sources, application context and browser observations share the 60,000-byte context limit. The server builds one bounded context from operator context and snapshot headers/files; validation and consent apply to that final text. The response adds `repository_snapshots`, containing the selected summaries. The existing `context_sha256` hashes the complete context actually sent. No server-side latest-ref lookup can silently replace a selected snapshot.
 
 Frontend snapshot selection shows repository, role, commit, included paths and full content for review. Selecting a snapshot or editing context resets consent. Disconnection, project changes and cancelled requests discard transient token state. Generated scenarios remain unapproved.
 

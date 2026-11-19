@@ -96,46 +96,66 @@ func (s *Store) ListRepositorySnapshots(ctx context.Context, projectID string) (
 	return summaries, rows.Err()
 }
 
-func (s *Store) GetRepositorySnapshot(ctx context.Context, projectID, snapshotID string) (RepositorySnapshot, error) {
+func scanRepositorySnapshot(row rowScanner) (RepositorySnapshot, error) {
 	var snapshot RepositorySnapshot
-	var files []byte
-	err := s.db.QueryRow(ctx, `SELECT `+repositoryColumns+`,files FROM repository_snapshots
-		WHERE project_id=$1 AND id=$2`, projectID, snapshotID).Scan(&snapshot.ID, &snapshot.ProjectID,
-		&snapshot.Provider, &snapshot.Repository, &snapshot.Ref, &snapshot.Role, &snapshot.CommitSHA, &snapshot.ContentSHA256,
-		&snapshot.FileCount, &snapshot.TotalBytes, &snapshot.CreatedAt, &files)
+	err := row.Scan(&snapshot.ID, &snapshot.ProjectID, &snapshot.Provider, &snapshot.Repository,
+		&snapshot.Ref, &snapshot.Role, &snapshot.CommitSHA, &snapshot.ContentSHA256,
+		&snapshot.FileCount, &snapshot.TotalBytes, &snapshot.CreatedAt, &snapshot.Files)
+	return snapshot, err
+}
+
+func (s *Store) GetRepositorySnapshot(ctx context.Context, projectID, snapshotID string) (RepositorySnapshot, error) {
+	row := s.db.QueryRow(ctx, `SELECT `+repositoryColumns+`,files FROM repository_snapshots
+		WHERE project_id=$1 AND id=$2`, projectID, snapshotID)
+	snapshot, err := scanRepositorySnapshot(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return RepositorySnapshot{}, ErrNotFound
 	}
-	if err != nil {
-		return RepositorySnapshot{}, err
-	}
-	return snapshot, json.Unmarshal(files, &snapshot.Files)
+	return snapshot, err
 }
 
+const MaxPlanContextBytes = 60_000
+
 func (s *Store) SelectRepositorySnapshots(ctx context.Context, projectID string, ids []string) ([]RepositorySnapshot, error) {
-	if len(ids) > 2 {
-		return nil, fmt.Errorf("%w: select at most two repository snapshots", ErrInvalid)
+	if len(ids) == 0 {
+		return nil, nil
 	}
-	selected := make([]RepositorySnapshot, 0, len(ids))
-	seenIDs := make(map[string]bool, len(ids))
-	seenRoles := make(map[string]bool, len(ids))
-	for _, id := range ids {
-		if id == "" || seenIDs[id] {
+	positions := make(map[string]int, len(ids))
+	for i, id := range ids {
+		if _, exists := positions[id]; id == "" || exists {
 			return nil, fmt.Errorf("%w: repository_snapshot_ids must be nonempty and unique", ErrInvalid)
 		}
-		seenIDs[id] = true
-		snapshot, err := s.GetRepositorySnapshot(ctx, projectID, id)
-		if errors.Is(err, ErrNotFound) {
-			return nil, fmt.Errorf("%w: a repository snapshot is not in this project", ErrInvalid)
-		}
+		positions[id] = i
+	}
+	rows, err := s.db.Query(ctx, `SELECT `+repositoryColumns+`,files FROM repository_snapshots
+		WHERE project_id=$1 AND id=ANY($2::text[])`, projectID, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	selected := make([]RepositorySnapshot, len(ids))
+	var found, totalBytes int
+	for rows.Next() {
+		snapshot, err := scanRepositorySnapshot(rows)
 		if err != nil {
 			return nil, err
 		}
-		if seenRoles[snapshot.Role] {
-			return nil, fmt.Errorf("%w: select at most one repository snapshot per role", ErrInvalid)
+		// Paths and revision metadata also occupy space in the serialized plan context.
+		totalBytes += snapshot.TotalBytes + len(snapshot.Repository) + len(snapshot.Ref) + len(snapshot.CommitSHA)
+		for _, file := range snapshot.Files {
+			totalBytes += len(file.Path)
 		}
-		seenRoles[snapshot.Role] = true
-		selected = append(selected, snapshot)
+		if totalBytes > MaxPlanContextBytes {
+			return nil, fmt.Errorf("%w: selected repository sources exceed %d bytes; remove a snapshot or import fewer files", ErrInvalid, MaxPlanContextBytes)
+		}
+		selected[positions[snapshot.ID]] = snapshot
+		found++
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if found != len(ids) {
+		return nil, fmt.Errorf("%w: a repository snapshot is not in this project", ErrInvalid)
 	}
 	return selected, nil
 }

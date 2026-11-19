@@ -224,11 +224,8 @@ func (p *Planner) Config() Config {
 
 func (p *Planner) Validate(in Input, byokKey string) error {
 	if len(strings.TrimSpace(in.Prompt)) == 0 || len(in.Prompt) > 4000 ||
-		(len(strings.TrimSpace(in.Context)) == 0 && len(in.RepositorySnapshotIDs) == 0 && in.DiscoveryID == "") || len(in.Context) > 60000 || !in.Consent {
+		(len(strings.TrimSpace(in.Context)) == 0 && len(in.RepositorySnapshotIDs) == 0 && in.DiscoveryID == "") || len(in.Context) > qa.MaxPlanContextBytes || !in.Consent {
 		return fmt.Errorf("%w: prompt, context, and explicit consent are required within size limits", ErrInvalid)
-	}
-	if len(in.RepositorySnapshotIDs) > 2 {
-		return fmt.Errorf("%w: select at most two repository snapshots", ErrInvalid)
 	}
 	seenIDs := make(map[string]bool, len(in.RepositorySnapshotIDs))
 	for _, id := range in.RepositorySnapshotIDs {

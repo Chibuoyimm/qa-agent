@@ -52,10 +52,16 @@ export async function verifyReleaseDiscussionAndSource(page, release, apiToken) 
   return {name: 'Standalone report detaches without replacing either draft. The pinned deployment files reopen after reload and in a fresh browser session.', status: 'passed'};
 }
 
-export async function verifyWorkspaceUI(page, api, templates, goodURL, badURL, waitRun, evidence, apiToken, insertFixtureTurn) {
+export async function verifyWorkspaceUI(page, api, templates, goodURL, badURL, waitRun, evidence, apiToken, insertFixtureTurn, seedPlanSource) {
   await page.unroute('**/api/ai/config');
   await page.route('**/api/ai/config', route => route.fulfill({ json: {provider:'openai',models:['workspace-fixture'],managed_available:false,byok_available:true} }));
   const app = await api('/api/projects',{name:'Task workspace proof',base_url:goodURL});
+  const planSources = [];
+  for (const [name, role] of [['customer', 'frontend'], ['admin', 'frontend'], ['orders', 'backend'], ['payments', 'backend']]) {
+    planSources.push(await seedPlanSource(app.id, `fixture/${name}`, role));
+  }
+  const summaries = await api(`/api/projects/${app.id}/repositories`);
+  const selectedSources = planSources.map(source => summaries.find(item => item.id === source.snapshot_id));
   let setup;
   await api(`/api/projects/${app.id}/journeys`,{name:'Permissions'});
   await api(`/api/projects/${app.id}/journeys`,{name:'Invitations'});
@@ -67,6 +73,7 @@ export async function verifyWorkspaceUI(page, api, templates, goodURL, badURL, w
     if(route.request().method()==='GET')return route.continue();
     const input=route.request().postDataJSON(); calls++;
     assert.equal(input.consent,true);
+    assert.deepEqual(input.repository_snapshot_ids, planSources.map(source => source.snapshot_id));
     assert.equal(route.request().headers()['x-qa-provider-key'],'workspace-transient-key');
     const taskID=route.request().url().split('/tasks/')[1].split('/')[0];
     const task=await api(`/api/projects/${app.id}/tasks/${taskID}`);
@@ -79,7 +86,7 @@ export async function verifyWorkspaceUI(page, api, templates, goodURL, badURL, w
       return;
     }
     const proposed=templates.slice(0,3).map((item,index)=>({...item,approved:false,...(index===1?{expected_outcome:'Exactly 2 orders are displayed.',steps:item.steps.map(step=>step.action==='assert_text'&&step.test_id==='dashboard-orders'?{...step,value:'2 orders'}:step)}:{})}));
-    const proposal={provider:'openai',model:'workspace-fixture',context_sha256:'fixture',discovery_id:discovery.id,scenarios:calls===2?[]:proposed,questions:calls===2?['What is the approved revenue?']:[],assumptions:[]};
+    const proposal={provider:'openai',model:'workspace-fixture',repository_snapshots:selectedSources,context_sha256:'fixture',discovery_id:discovery.id,scenarios:calls===2?[]:proposed,questions:calls===2?['What is the approved revenue?']:[],assumptions:[]};
     insertFixtureTurn({id:input.request_id,project_id:app.id,task_id:taskID,prompt:input.prompt,proposal});
     const turn=(await api(`/api/projects/${app.id}/tasks/${taskID}/chat`)).turns.find(item=>item.id===input.request_id);
     await route.fulfill({json:turn});
@@ -125,6 +132,24 @@ export async function verifyWorkspaceUI(page, api, templates, goodURL, badURL, w
   await page.getByLabel('OpenAI API key',{exact:true}).filter({visible:true}).fill('workspace-transient-key');
   await page.getByRole('textbox',{name:/^Application context/}).filter({visible:true}).fill(retainedContext);
   await page.getByRole('textbox',{name:'Your message',exact:true}).fill('Test revenue reporting');
+  await page.getByText('Review source context',{exact:true}).filter({visible:true}).click();
+  const sourceBrowser = page.locator('.repository-browser:visible').filter({has:page.getByRole('heading',{name:'Saved snapshots'})});
+  const sourceConsent = page.getByRole('checkbox', { name: /I (agree to send|have reviewed)/ });
+  for (const source of planSources) {
+    const card = sourceBrowser.locator('article').filter({has:page.getByRole('heading', {name:source.repository, exact:true})});
+    await card.getByRole('button', {name:'Review files'}).click();
+    await sourceConsent.check();
+    await card.getByRole('button', {name:'Use this reviewed snapshot'}).click();
+    assert.equal(await sourceConsent.isChecked(), false, 'Selecting a source requires fresh consent');
+    await card.getByRole('button', {name:'Hide files'}).click();
+  }
+  await sourceBrowser.getByText('4 snapshots selected', {exact:true}).waitFor();
+  await sourceBrowser.getByRole('button', {name:'Refresh'}).click();
+  const paymentsCard = sourceBrowser.locator('article').filter({has:page.getByRole('heading', {name:'fixture/payments', exact:true})});
+  await paymentsCard.getByRole('button',{name:/Remove fixture\/payments/}).click();
+  await sourceBrowser.getByText('3 snapshots selected', {exact:true}).waitFor();
+  await paymentsCard.getByRole('button',{name:'Review files'}).click();
+  await paymentsCard.getByRole('button',{name:'Use this reviewed snapshot'}).click();
   await page.getByRole('checkbox',{name:/I agree to send this message/}).check();
   await page.getByRole('button',{name:'Draft test plan',exact:true}).click();
   await page.getByRole('button',{name:'Review and retry',exact:true}).waitFor({timeout:90000});
@@ -174,6 +199,11 @@ export async function verifyWorkspaceUI(page, api, templates, goodURL, badURL, w
   await page.getByLabel('Workspace access token',{exact:true}).fill(apiToken);
   await page.getByRole('button',{name:'Open workspace',exact:true}).click();
   await page.getByRole('heading',{name:'2 checks selected',exact:true}).waitFor();
+  const sourcesUsed = page.locator('details').filter({has:page.getByText('Context used for this plan',{exact:true})}).last();
+  await sourcesUsed.locator('summary').click();
+  for (const source of planSources) {
+    await sourcesUsed.getByText(`${source.repository} · ${source.role} · ${source.commit_sha.slice(0,12)}`, {exact:true}).waitFor();
+  }
   assert.ok((await plan.innerText()).includes(badURL),'Reviewed deployment survives reload');
   await editOrders.click();
   assert.equal(await plan.getByRole('textbox',{name:'Expected outcome',exact:true}).inputValue(),reviewedOutcome,'Unapproved review edits survive reload');
