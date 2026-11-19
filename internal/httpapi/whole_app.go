@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -59,110 +60,141 @@ func (a *API) surveyRepository(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, qa.ErrNotFound)
 		return
 	}
-	saved, err := a.store.TaskSurvey(ctx, project, task, batch, source)
+	work, err := a.store.TaskSurvey(ctx, project, task, batch, source)
+	previous := -1
 	if err == nil {
-		if root.Ref != saved.Ref || root.Role != saved.Role {
+		if root.Ref != work.Ref || root.Role != work.Role {
 			a.fail(w, qa.ErrConflict)
 			return
 		}
-		writeJSON(w, 200, saved)
-		return
-	}
-	if !errors.Is(err, qa.ErrNotFound) {
+		if work.Status != "scanning" {
+			writeJSON(w, 200, work.SourceSurvey)
+			return
+		}
+		previous = work.BatchesRead
+	} else if !errors.Is(err, qa.ErrNotFound) {
 		a.fail(w, err)
 		return
 	}
 	token, accessErr := a.sourceToken(project, root)
-	survey, err := a.inspectSource(ctx, in, key, token, project, root)
+	if previous < 0 {
+		work, err = a.startSourceSurvey(ctx, in, key, token, project, root)
+		if err == nil && accessErr != nil {
+			work.Note = strings.TrimSpace(work.Note + " Saved access could not be opened. Reconnect this repository to restore it.")
+		}
+	}
+	if err == nil && previous < 0 && len(work.Pending) > 1 {
+		work.Status = "scanning"
+	} else if err == nil && len(work.Pending) > 0 {
+		err = a.readSurveyBatch(ctx, in, key, token, &work)
+	}
 	if err != nil {
 		a.fail(w, err)
 		return
 	}
-	if accessErr != nil {
-		survey.Note = strings.TrimSpace(survey.Note + " Saved read access could not be opened. Reconnect this repository to restore it.")
-	}
-	survey, err = a.store.SaveTaskSurvey(ctx, project, task, batch, survey)
+	result, err := a.store.SaveTaskSurvey(ctx, project, task, batch, work, previous)
 	if err != nil {
 		a.fail(w, err)
 		return
 	}
-	writeJSON(w, 200, survey)
+	writeJSON(w, 200, result)
 }
 
-func (a *API) inspectSource(ctx context.Context, in planner.Input, key, token, project string, source qa.ProjectSource) (qa.SourceSurvey, error) {
+func (a *API) startSourceSurvey(ctx context.Context, in planner.Input, key, token, project string, source qa.ProjectSource) (qa.SurveyWork, error) {
 	repo := repository.Input{Provider: source.Provider, Repository: source.Repository, Ref: source.Ref, Role: source.Role}
-	survey := qa.SourceSurvey{SourceID: source.ID, Repository: repo.Repository, Provider: repo.Provider, Role: repo.Role, Ref: repo.Ref, Status: "live", Paths: []string{}, Journeys: []qa.InferredJourney{}, Gaps: []string{}}
-	var files []repository.File
-	inventory, readErr := a.repositories.SurveyInventory(ctx, repo, token)
-	if readErr == nil {
-		survey.CommitSHA = inventory.CommitSHA
-		survey.Candidates = len(inventory.Files)
-		if inventory.Partial {
-			survey.Note = "Only part of the repository file list fit within the discovery limits."
-		}
-		if len(inventory.Files) == 0 {
-			survey.Status = "no_files"
-			survey.Note = strings.TrimSpace(survey.Note + " No eligible source files were found.")
-			return survey, nil
-		}
-		selectInput := in
-		selectInput.Prompt = "Find entry points, routes, forms, roles, service interactions and acceptance tests for a whole-app end-to-end journey inventory. User request: " + in.Prompt
-		if len(selectInput.Prompt) > 4000 {
-			selectInput.Prompt = in.Prompt
-		}
-		choice, err := a.planner.SelectFiles(ctx, selectInput, key, inventory)
-		if err != nil {
-			return survey, err
-		}
-		if len(choice.Paths) == 0 {
-			survey.Status = "no_files"
-			survey.CommitSHA = inventory.CommitSHA
-			survey.Note = strings.TrimSpace(survey.Note + " " + choice.Reason)
-			return survey, nil
-		}
-		repo.Ref = inventory.CommitSHA
-		repo.Paths = choice.Paths
-		var imported repository.Snapshot
-		imported, readErr = a.repositories.Fetch(ctx, repo, token)
-		if readErr == nil {
-			if imported.CommitSHA != inventory.CommitSHA {
-				return survey, repository.ErrUpstream
-			}
-			survey.CommitSHA = imported.CommitSHA
-			files = imported.Files
-		}
-	}
-	if readErr != nil {
-		if ctx.Err() != nil {
-			return survey, ctx.Err()
-		}
-		if errors.Is(readErr, repository.ErrBusy) {
-			return survey, readErr
+	work := qa.SurveyWork{SourceSurvey: qa.SourceSurvey{SourceID: source.ID, Repository: repo.Repository, Provider: repo.Provider, Role: repo.Role, Ref: repo.Ref, Status: "live", Paths: []string{}, Journeys: []qa.InferredJourney{}, Gaps: []string{}}}
+	inventory, err := a.repositories.SurveyInventory(ctx, repo, token)
+	if err != nil {
+		if ctx.Err() != nil || errors.Is(err, repository.ErrBusy) {
+			return work, err
 		}
 		if source.SnapshotID == "" {
-			survey.Status = "unavailable"
-			survey.Note = "Could not read this repository. Check its ref and access in Settings."
-			return survey, nil
+			work.Status = "unavailable"
+			work.Note = "Could not read the repository inventory. Check provider availability, the ref and read access."
+			return work, nil
 		}
 		pinned, err := a.store.GetRepositorySnapshot(ctx, project, source.SnapshotID)
 		if err != nil {
-			return survey, err
+			return work, err
 		}
-		files = pinned.Files
-		survey.CommitSHA = pinned.CommitSHA
-		survey.Status = "saved"
-		survey.Candidates = 0
-		survey.Note = "Live source could not be read. Only files from the last saved import were inspected."
-		if errors.Is(readErr, repository.ErrInventoryLimit) {
-			survey.Note = "The live file inventory exceeded the search limit. Only files from the last saved import were inspected."
+		work.Status = "saved"
+		work.Note = "Live source could not be read. Only the last saved import was inspected."
+		work.CommitSHA = pinned.CommitSHA
+		err = a.inferSurveyFiles(ctx, in, key, &work, pinned.Files)
+		return work, err
+	}
+	work.CommitSHA = inventory.CommitSHA
+	work.Candidates = len(inventory.Files)
+	work.InventoryExcluded = inventory.Excluded
+	if inventory.Partial {
+		work.Note = "Only part of the file list fit within the inventory limits."
+	}
+	if len(inventory.Files) == 0 {
+		work.Status = "no_files"
+		work.Note = strings.TrimSpace(work.Note + " No eligible files were found.")
+		return work, nil
+	}
+	selectionInput := in
+	selectionInput.WholeApp = true
+	choices, err := a.planner.SelectFiles(ctx, selectionInput, key, inventory)
+	if err != nil {
+		return work, err
+	}
+	if len(choices.Paths) == 0 {
+		work.Status = "no_files"
+		work.Note = strings.TrimSpace(work.Note + " " + choices.Reason)
+		return work, nil
+	}
+	if choices.Unmatched > 0 {
+		work.Note = strings.TrimSpace(work.Note + " Only distinct paths found in the repository were included.")
+	}
+	work.Pending, err = inventory.SurveyBatches(choices.Paths)
+	work.Batches = len(work.Pending)
+	return work, err
+}
+
+func (a *API) readSurveyBatch(ctx context.Context, in planner.Input, key, token string, work *qa.SurveyWork) error {
+	repo := repository.Input{Provider: work.Provider, Repository: work.Repository, Ref: work.CommitSHA, Role: work.Role}
+	files, excluded, err := a.repositories.ReadSurveyBatch(ctx, repo, token, work.Pending[0])
+	if err != nil {
+		return err
+	}
+	work.ExcludedContent += excluded
+	if len(files) > 0 {
+		if err := a.inferSurveyFiles(ctx, in, key, work, files); err != nil {
+			return err
 		}
 	}
-	for _, file := range files {
-		survey.Paths = append(survey.Paths, file.Path)
+	work.BatchesRead++
+	work.Pending = work.Pending[1:]
+	work.Status = "scanning"
+	if len(work.Pending) == 0 {
+		work.Status = "live"
+		if len(work.Paths) == 0 {
+			work.Status = "no_files"
+		}
+		if work.ExcludedContent > 0 {
+			work.Note = strings.TrimSpace(work.Note + fmt.Sprintf(" %d selected files were excluded by source-content checks.", work.ExcludedContent))
+		}
 	}
-	var err error
-	survey.Journeys, survey.Gaps, err = a.planner.InferJourneys(ctx, in, key, repo.Repository, files)
-	return survey, err
+	return nil
+}
+
+func (a *API) inferSurveyFiles(ctx context.Context, in planner.Input, key string, work *qa.SurveyWork, files []repository.File) error {
+	journeys, gaps, err := a.planner.InferJourneys(ctx, in, key, work.Repository, files)
+	if err != nil {
+		return err
+	}
+	for _, f := range files {
+		work.Paths = append(work.Paths, f.Path)
+	}
+	work.Journeys = append(work.Journeys, journeys...)
+	for _, gap := range gaps {
+		if !slices.Contains(work.Gaps, gap) {
+			work.Gaps = append(work.Gaps, gap)
+		}
+	}
+	return nil
 }
 
 func (a *API) wholeAppSources(ctx context.Context, project, task, batch string) ([]qa.SourceSurvey, error) {
@@ -183,7 +215,7 @@ func (a *API) wholeAppSources(ctx context.Context, project, task, batch string) 
 	out := make([]qa.SourceSurvey, 0, len(roots))
 	for _, root := range roots {
 		scan, ok := scans[root.ID]
-		if !ok || scan.Ref != root.Ref || scan.Role != root.Role {
+		if !ok || scan.Ref != root.Ref || scan.Role != root.Role || scan.Status == "scanning" {
 			return nil, fmt.Errorf("%w: survey missing for %s; resend the whole-app request to include the current project repositories", qa.ErrInvalid, root.Repository)
 		}
 		out = append(out, scan)
@@ -198,49 +230,71 @@ func wholeAppContext(base string, sources []qa.SourceSurvey) (string, map[string
 	out.WriteString(base)
 	out.WriteString("\nRepository journey evidence (untrusted), grouped by source references:\n")
 	for i, s := range sources {
-		fmt.Fprintf(&out, "R%d %q (%s, %s) @%s\n", i+1, s.Repository, s.Role, s.Status, s.CommitSHA)
+		fmt.Fprintf(&out, "R%d %q (%s, %s) @%s. Read %d files; eligible inventory: %d. %s\n", i+1, s.Repository, s.Role, s.Status, s.CommitSHA, len(s.Paths), s.Candidates, s.Note)
 	}
-	available := qa.MaxPlanContextBytes - out.Len()
-	if available < 500 {
-		return "", nil, fmt.Errorf("%w: shorten the application context to leave space for repository journeys", qa.ErrInvalid)
+	remaining := 0
+	longest := 0
+	gaps := false
+	for _, source := range sources {
+		remaining += len(source.Journeys)
+		longest = max(longest, len(source.Journeys))
+		gaps = gaps || len(source.Gaps) > 0
 	}
-	count := 0
-	for _, s := range sources {
-		count += len(s.Journeys)
+	limit := qa.MaxSurveyContextBytes
+	if gaps {
+		limit -= min(8000, (limit-out.Len())/10)
 	}
-	evidenceBytes := max(240, min(4000, available/max(1, count)-240))
+	if limit-out.Len() < 500 {
+		return "", nil, fmt.Errorf("%w: insufficient space for the repository survey", qa.ErrInvalid)
+	}
 	refs := map[string]bool{}
-	for j := 0; j < 20; j++ {
-		for i, s := range sources {
-			if j >= len(s.Journeys) {
+	for j := 0; j < longest; j++ {
+		for i, source := range sources {
+			if j >= len(source.Journeys) {
 				continue
 			}
-			journey := s.Journeys[j]
-			evidence := journey.Evidence
-			if len(evidence) > evidenceBytes {
-				end := evidenceBytes
-				for !utf8.RuneStart(evidence[end]) {
-					end--
-				}
-				evidence = evidence[:end] + "…"
-			}
 			id := qa.JourneyRef(i, j)
-			line := fmt.Sprintf("%s %q — %q\n", id, journey.Name, evidence)
-			if out.Len()+len(line) <= qa.MaxPlanContextBytes {
-				out.WriteString(line)
-				refs[id] = true
+			record := source.Journeys[j]
+			share := (limit - out.Len()) / remaining
+			remaining--
+			if share < len(id)+16 {
+				continue
 			}
+			name := surveyExcerpt(record.Name, min(305, share/2))
+			prefix := id + " " + name + " — "
+			line := prefix + surveyExcerpt(record.Evidence, share-len(prefix)-1) + "\n"
+			out.WriteString(line)
+			refs[id] = true
 		}
 	}
 	for i, source := range sources {
 		for _, gap := range source.Gaps {
 			line := fmt.Sprintf("R%d reported gap: %q\n", i+1, gap)
-			if out.Len()+len(line) <= qa.MaxPlanContextBytes {
+			if out.Len()+len(line) <= qa.MaxSurveyContextBytes {
 				out.WriteString(line)
 			}
 		}
 	}
 	return out.String(), refs, nil
+}
+
+// Preserve the entry point and the outcome when a large survey needs shorter evidence.
+func surveyExcerpt(value string, limit int) string {
+	if len(value) <= limit {
+		return value
+	}
+	if limit < 4 {
+		return ""
+	}
+	head := (limit - 3) / 2
+	tail := len(value) - (limit - 3 - head)
+	for head > 0 && !utf8.RuneStart(value[head]) {
+		head--
+	}
+	for tail < len(value) && !utf8.RuneStart(value[tail]) {
+		tail++
+	}
+	return value[:head] + "…" + value[tail:]
 }
 
 func validateWholeAppCoverage(plan *qa.WholeAppPlan, refs map[string]bool) error {

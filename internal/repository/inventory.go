@@ -16,6 +16,7 @@ type Candidate struct {
 	Size int    `json:"size"`
 }
 type Inventory struct {
+	blobs     map[string]string
 	CommitSHA string      `json:"commit_sha"`
 	Files     []Candidate `json:"files"`
 	Partial   bool        `json:"partial,omitempty"`
@@ -69,7 +70,8 @@ func (c *Client) inventory(ctx context.Context, in Input, token string, allowPar
 	if err != nil {
 		return Inventory{}, err
 	}
-	result := Inventory{CommitSHA: commit, Files: []Candidate{}}
+	result := Inventory{CommitSHA: commit, Files: []Candidate{}, blobs: map[string]string{}}
+	recursive := allowPartial && in.Provider == "github"
 	type directory struct {
 		prefix, sha string
 		depth       int
@@ -87,25 +89,42 @@ scan:
 			}
 			return Inventory{}, ErrInventoryLimit
 		}
-		tree, err := c.fetchTree(ctx, base, in.Provider, dir.sha, token, &budget)
+		var tree gitTree
+		if recursive {
+			err = c.get(ctx, base+"/git/trees/"+root+"?recursive=1", token, maxMetadataBytes/2, &budget, &tree)
+			if errors.Is(err, errResponseTooLarge) {
+				// Spend the remaining metadata budget walking individual directories.
+				recursive = false
+				pending = append([]directory{dir}, pending...)
+				continue
+			}
+		} else {
+			tree, err = c.fetchTree(ctx, base, in.Provider, dir.sha, token, &budget)
+		}
 		if err != nil {
 			return Inventory{}, err
 		}
-		if tree.Truncated || tree.SHA != dir.sha {
+		if tree.Truncated && recursive {
+			result.Partial = true
+		}
+		if (tree.Truncated && !recursive) || tree.SHA != dir.sha {
 			return Inventory{}, ErrUpstream
 		}
 		seen := map[string]bool{}
 		for _, entry := range tree.Tree {
-			if entry.Path == "" || strings.Contains(entry.Path, "/") || seen[entry.Path] || !shaPattern.MatchString(entry.SHA) {
+			if entry.Path == "" || (!recursive && strings.Contains(entry.Path, "/")) || seen[entry.Path] || !shaPattern.MatchString(entry.SHA) {
 				return Inventory{}, ErrUpstream
 			}
 			seen[entry.Path] = true
 			filename := dir.prefix + entry.Path
-			if validatePaths([]string{filename}) != nil || excludedName(entry.Path) {
+			if validatePaths([]string{filename}) != nil || excludedInventoryPath(entry.Path) {
 				result.Excluded++
 				continue
 			}
 			if entry.Type == "tree" && (entry.Mode == "040000" || entry.Mode == "40000") {
+				if recursive {
+					continue
+				}
 				pending = append(pending, directory{filename + "/", entry.SHA, dir.depth + 1})
 				if len(pending) > maxAPIRequests {
 					if allowPartial {
@@ -117,7 +136,7 @@ scan:
 				}
 				continue
 			}
-			if entry.Type != "blob" || (entry.Mode != "100644" && entry.Mode != "100755") || entry.Size < 0 || entry.Size > maxBytes || !sourceName(entry.Path) {
+			if entry.Type != "blob" || (entry.Mode != "100644" && entry.Mode != "100755") || entry.Size < 0 || entry.Size > maxBytes || !sourceName(path.Base(entry.Path)) {
 				result.Excluded++
 				continue
 			}
@@ -130,6 +149,7 @@ scan:
 				return Inventory{}, ErrInventoryLimit
 			}
 			result.Files = append(result.Files, Candidate{filename, entry.Size})
+			result.blobs[filename] = entry.SHA
 		}
 	}
 	if len(result.Files) == 0 && !allowPartial {
@@ -137,6 +157,15 @@ scan:
 	}
 	sort.Slice(result.Files, func(i, j int) bool { return result.Files[i].Path < result.Files[j].Path })
 	return result, nil
+}
+
+func excludedInventoryPath(filename string) bool {
+	for _, part := range strings.Split(filename, "/") {
+		if excludedName(part) {
+			return true
+		}
+	}
+	return false
 }
 
 func excludedName(name string) bool {

@@ -5,7 +5,7 @@ import JourneyProgress from './JourneyProgress'
 import PlanningRecovery from './PlanningRecovery'
 import AiProposals from './AiProposals'
 import ReviewPlan, { type PlanRunSettings } from './ReviewPlan'
-import { api, type ProjectSource, formatDate, isActive, newRequestID, type ChatPage, type ChatTurn, type Discovery, type Journey, type Project, type Run, type Scenario, type TestingTask } from './api'
+import { api, type SourceSurvey, type ProjectSource, formatDate, isActive, newRequestID, type ChatPage, type ChatTurn, type Discovery, type Journey, type Project, type Run, type Scenario, type TestingTask } from './api'
 import { noProjectRepositories, errorText, runCounts, checkCount, shortTitle, journeySummary } from './workspace'
 
 export function RunCard({ token, id, onOpen }: { token: string; id: string; onOpen: (id: string) => void }) {
@@ -144,7 +144,12 @@ export default function TaskWorkspace({ token, project, taskId, draftKey, journe
         } catch { /* A new request still works if tab storage is unavailable. */ }
         for (const [index, source] of sources.entries()) {
           setProgress(`Inspecting repository ${index + 1} of ${sources.length} · ${source.repository}`)
-          await api(token, `${root}/tasks/${id}/source-surveys/${batch}/${source.id}`, options)
+          const endpoint = `${root}/tasks/${id}/source-surveys/${batch}/${source.id}`
+          let survey = await api<SourceSurvey>(token, endpoint, options)
+          while (survey.status === 'scanning') {
+            setProgress(`${source.repository} · reading batch ${(survey.batches_read ?? 0) + 1} of ${survey.batches}`)
+            survey = await api<SourceSurvey>(token, endpoint, options)
+          }
         }
         input.survey_batch = batch
       }

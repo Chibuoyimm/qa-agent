@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/Chibuoyimm/qa-agent/internal/repository"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -93,8 +94,8 @@ func (s *Store) ForgetRepositoryCredential(ctx context.Context, project, source 
 	}
 	return nil
 }
-func (s *Store) TaskSurvey(ctx context.Context, project, task, batch, source string) (SourceSurvey, error) {
-	var survey SourceSurvey
+func (s *Store) TaskSurvey(ctx context.Context, project, task, batch, source string) (SurveyWork, error) {
+	var survey SurveyWork
 	err := s.db.QueryRow(ctx, `SELECT r.survey FROM repository_surveys r JOIN testing_tasks t ON t.id=r.task_id WHERE t.project_id=$1 AND t.id=$2 AND r.batch_id=$3 AND r.source_id=$4`, project, task, batch, source).Scan(&survey)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return survey, ErrNotFound
@@ -109,18 +110,29 @@ type InferredJourney struct {
 }
 
 type SourceSurvey struct {
-	SourceID   string            `json:"source_id"`
-	Repository string            `json:"repository"`
-	Provider   string            `json:"provider"`
-	Ref        string            `json:"ref"`
-	CommitSHA  string            `json:"commit_sha"`
-	Role       string            `json:"role"`
-	Status     string            `json:"status"`
-	Note       string            `json:"note,omitempty"`
-	Candidates int               `json:"eligible_files,omitempty"`
-	Paths      []string          `json:"paths"`
-	Journeys   []InferredJourney `json:"journeys"`
-	Gaps       []string          `json:"gaps"`
+	SourceID          string            `json:"source_id"`
+	Repository        string            `json:"repository"`
+	Provider          string            `json:"provider"`
+	Ref               string            `json:"ref"`
+	CommitSHA         string            `json:"commit_sha"`
+	Role              string            `json:"role"`
+	Status            string            `json:"status"`
+	Note              string            `json:"note,omitempty"`
+	Batches           int               `json:"batches,omitempty"`
+	BatchesRead       int               `json:"batches_read,omitempty"`
+	InventoryExcluded int               `json:"inventory_excluded,omitempty"`
+	ExcludedContent   int               `json:"excluded_content,omitempty"`
+	Candidates        int               `json:"eligible_files,omitempty"`
+	Paths             []string          `json:"paths"`
+	Journeys          []InferredJourney `json:"journeys"`
+	Gaps              []string          `json:"gaps"`
+}
+
+// Only the source summary is returned to clients. The queued immutable file
+// identities stay with the task so interrupted scans can resume.
+type SurveyWork struct {
+	SourceSurvey
+	Pending [][]repository.SurveyFile `json:"pending_files,omitempty"`
 }
 
 type WholeAppPlan struct {
@@ -149,7 +161,7 @@ func (s *Store) TaskSurveys(ctx context.Context, projectID, taskID, batch string
 	return result, rows.Err()
 }
 
-func (s *Store) SaveTaskSurvey(ctx context.Context, projectID, taskID, batch string, survey SourceSurvey) (SourceSurvey, error) {
+func (s *Store) SaveTaskSurvey(ctx context.Context, projectID, taskID, batch string, survey SurveyWork, previous int) (SourceSurvey, error) {
 	raw, err := json.Marshal(survey)
 	if err != nil {
 		return SourceSurvey{}, err
@@ -157,10 +169,12 @@ func (s *Store) SaveTaskSurvey(ctx context.Context, projectID, taskID, batch str
 	err = s.db.QueryRow(ctx, `INSERT INTO repository_surveys(task_id,batch_id,source_id,survey)
         SELECT t.id,$3,$4,$5 FROM testing_tasks t
         WHERE t.project_id=$1 AND t.id=$2
-        ON CONFLICT(task_id,batch_id,source_id) DO UPDATE SET survey=repository_surveys.survey RETURNING survey`,
-		projectID, taskID, batch, survey.SourceID, raw).Scan(&survey)
+        ON CONFLICT(task_id,batch_id,source_id) DO UPDATE SET survey=EXCLUDED.survey
+        WHERE repository_surveys.survey->>'status'='scanning' AND COALESCE((repository_surveys.survey->>'batches_read')::int,0)=$6 RETURNING survey`,
+		projectID, taskID, batch, survey.SourceID, raw, previous).Scan(&survey)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return SourceSurvey{}, ErrNotFound
+		current, err := s.TaskSurvey(ctx, projectID, taskID, batch, survey.SourceID)
+		return current.SourceSurvey, err
 	}
-	return survey, err
+	return survey.SourceSurvey, err
 }

@@ -24,7 +24,7 @@
               "required": ["action", "path", "test_id", "value", "secret_env", "locator", "save_as", "json_pointer", "value_ref"],
               "properties": {
                 "action": {"type": "string", "enum": ["navigate", "fill", "click", "assert_text", "assert_visible", "assert_absent", "assert_path", "select_option", "phase", "use_actor", "prepare_fixture", "cleanup_fixture", "capture_id", "capture_json", "assert_json", "assert_json_number"]},
-                "path": {"type": ["string", "null"]},
+                "path": {"type": ["string", "null"], "description": "Same-origin pathname only. Omit query strings and URL fragments. For navigate and assert_path all other operand fields are null."},
                 "save_as": {"type": ["string", "null"]},
                 "json_pointer": {"type": ["string", "null"]},
                 "value_ref": {"type": ["string", "null"]},

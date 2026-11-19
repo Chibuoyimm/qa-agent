@@ -116,6 +116,9 @@ func (s *Store) GetRepositorySnapshot(ctx context.Context, projectID, snapshotID
 
 const MaxPlanContextBytes = 60_000
 
+// Whole-app synthesis combines validated journey summaries from multiple repositories.
+const MaxSurveyContextBytes = 180_000
+
 func (s *Store) SelectRepositorySnapshots(ctx context.Context, projectID string, ids []string) ([]RepositorySnapshot, error) {
 	if len(ids) == 0 {
 		return nil, nil

@@ -171,6 +171,7 @@ func (a *API) chatProposal(w http.ResponseWriter, r *http.Request) {
 	var journeyRefs map[string]bool
 	if in.WholeApp {
 		in.Context, journeyRefs, err = wholeAppContext(in.Context, surveys)
+		in.SurveyContext = true
 		if err != nil {
 			planningErr = err
 			a.fail(w, err)

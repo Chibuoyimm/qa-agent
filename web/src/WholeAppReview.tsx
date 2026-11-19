@@ -2,7 +2,7 @@ import { Fragment } from 'react'
 import type { AiProposalResponse, SourceSurvey } from './api'
 
 const sourceStatus: Record<SourceSurvey['status'], string> = {
-  live: 'Read live', saved: 'Used saved files', no_files: 'No files selected', unavailable: 'Could not read',
+  scanning: 'Reading source', live: 'Read live', saved: 'Used saved files', no_files: 'No files selected', unavailable: 'Could not read',
 }
 
 function EvidenceFiles({source, paths}: {source: SourceSurvey; paths: string[]}) {
@@ -38,7 +38,7 @@ export default function WholeAppReview({ proposal }: { proposal: AiProposalRespo
     {plan.sources.filter(source => source.note).map(source => <p key={source.source_id}><strong>{source.repository}</strong> · {source.note}</p>)}
     <details><summary>Repository evidence</summary>{plan.sources.map(source => <div key={source.source_id}>
       <strong>{source.repository}</strong> · {sourceStatus[source.status]} · {source.ref} {source.commit_sha && <>· <code>{source.commit_sha.slice(0,12)}</code></>}
-      <p>{source.eligible_files ? `Read ${source.paths.length} of ${source.eligible_files} eligible ${source.eligible_files === 1 ? 'file' : 'files'}` : `${source.paths.length} ${source.paths.length === 1 ? 'file' : 'files'} inspected`}{source.paths.length > 0 && <> · <EvidenceFiles source={source} paths={source.paths} /></>}</p>
+      <p>{source.eligible_files ? `Read ${source.paths.length} of ${source.eligible_files} eligible ${source.eligible_files === 1 ? 'file' : 'files'}` : `${source.paths.length} ${source.paths.length === 1 ? 'file' : 'files'} inspected`}{(source.batches_read ?? 0)>1 && <> in {source.batches_read} batches</>}{source.inventory_excluded ? <> · {source.inventory_excluded} inventory entries excluded</> : null}{source.paths.length > 0 && <> · <EvidenceFiles source={source} paths={source.paths} /></>}</p>
     </div>)}
     {proposal.scenarios.map((scenario,i) => <div key={i}><strong>{scenario.name}</strong><ul>
       {candidates.filter(candidate=>plan.coverage[i]?.includes(candidate.id)).map(({id,source,journey})=>

@@ -16,11 +16,12 @@ import (
 )
 
 var (
-	ErrInvalid  = errors.New("invalid repository import")
-	ErrUpstream = errors.New("repository provider unavailable")
-	ErrAccess   = errors.New("Azure access denied; provide a Code (Read) personal access token and check the repository URL")
-	ErrTimeout  = errors.New("repository import timed out")
-	ErrBusy     = errors.New("repository importer busy")
+	errResponseTooLarge = fmt.Errorf("%w: provider response too large", ErrUpstream)
+	ErrInvalid          = errors.New("invalid repository import")
+	ErrUpstream         = errors.New("repository provider unavailable")
+	ErrAccess           = errors.New("Azure access denied; provide a Code (Read) personal access token and check the repository URL")
+	ErrTimeout          = errors.New("repository import timed out")
+	ErrBusy             = errors.New("repository importer busy")
 )
 
 const (
@@ -323,7 +324,7 @@ func (c *Client) read(ctx context.Context, endpoint, token, accept string, limit
 	if err != nil {
 		return nil, fmt.Errorf("%w: invalid request", ErrUpstream)
 	}
-	if req.URL.Scheme != "https" || req.URL.User != nil || (req.URL.Host != "api.github.com" && req.URL.Host != "dev.azure.com") {
+	if req.URL.Scheme != "https" || req.URL.User != nil || (req.URL.Host != "api.github.com" && req.URL.Host != "dev.azure.com" && !(req.URL.Host == "raw.githubusercontent.com" && token == "")) {
 		return nil, fmt.Errorf("%w: unsupported provider origin", ErrInvalid)
 	}
 	req.Header.Set("Accept", accept)
@@ -357,9 +358,9 @@ func (c *Client) read(ctx context.Context, endpoint, token, accept string, limit
 		}
 		return nil, ErrUpstream
 	}
-	if int64(len(body)) > limit {
-		return nil, fmt.Errorf("%w: provider response too large", ErrUpstream)
-	}
 	budget.bytes += int64(len(body))
+	if int64(len(body)) > limit {
+		return nil, errResponseTooLarge
+	}
 	return body, nil
 }

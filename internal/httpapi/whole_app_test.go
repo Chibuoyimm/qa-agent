@@ -3,6 +3,7 @@ package httpapi_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha1"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -48,7 +49,10 @@ func TestWholeApp(t *testing.T) {
 	}
 	const prompt = "test the whole app end to end"
 	const secret = "test-private-read-credential"
-	sha, tree, blob := strings.Repeat("a", 40), strings.Repeat("b", 40), strings.Repeat("c", 40)
+	sha, tree := strings.Repeat("a", 40), strings.Repeat("b", 40)
+	blobID := func(content string) string {
+		return fmt.Sprintf("%x", sha1.Sum([]byte(fmt.Sprintf("blob %d\x00%s", len(content), content))))
+	}
 	reply := func(code int, body string) *http.Response {
 		return &http.Response{StatusCode: code, Body: io.NopCloser(strings.NewReader(body))}
 	}
@@ -60,15 +64,35 @@ func TestWholeApp(t *testing.T) {
 		if !private && r.Header.Get("Authorization") != "" {
 			t.Error("private repository credential crossed repository boundary")
 		}
-		file, contents := "orders.ts", "Orders must show Order confirmed on /receipt. Track shipment shows Delivered on /shipment."
+		file, contents := "orders.ts", "Orders must show Order confirmed on /receipt. Track shipment shows Delivered on /shipment."+strings.Repeat(" ", 25000)
 		if private {
 			file, contents = "checkout.tsx", checkout+receipt+shipment
 		}
+		blob := blobID(contents)
+		const extraFile = "src/shipping.ts"
+		extraContents := strings.Repeat(" ", 20000) + "Order confirmed"
 		switch {
+		case r.URL.Host == "raw.githubusercontent.com":
+			if private || r.Header.Get("Authorization") != "" || !strings.Contains(r.URL.Path, "/"+sha+"/") {
+				t.Error("raw content must be public and pinned")
+			}
+			if strings.HasSuffix(r.URL.Path, "/"+extraFile) {
+				return reply(200, extraContents), nil
+			}
+			if strings.HasSuffix(r.URL.Path, "/"+file) {
+				return reply(200, contents), nil
+			}
 		case strings.Contains(r.URL.Path, "/commits/"):
 			return reply(200, fmt.Sprintf(`{"sha":%q,"commit":{"tree":{"sha":%q}}}`, sha, tree)), nil
 		case strings.Contains(r.URL.Path, "/trees/"):
-			return reply(200, fmt.Sprintf(`{"sha":%q,"tree":[{"path":%q,"mode":"100644","type":"blob","size":%d,"sha":%q}]}`, tree, file, len(contents), blob)), nil
+			entries := fmt.Sprintf(`{"path":%q,"mode":"100644","type":"blob","size":%d,"sha":%q}`, file, len(contents), blob)
+			if !private {
+				if r.URL.Query().Get("recursive") != "1" {
+					t.Error("expected one recursive inventory")
+				}
+				entries += fmt.Sprintf(`,{"path":%q,"mode":"100644","type":"blob","size":%d,"sha":%q}`, extraFile, len(extraContents), blobID(extraContents))
+			}
+			return reply(200, fmt.Sprintf(`{"sha":%q,"tree":[%s]}`, tree, entries)), nil
 		case strings.Contains(r.URL.Path, "/blobs/"):
 			return reply(200, fmt.Sprintf(`{"sha":%q,"encoding":"base64","size":%d,"content":%q}`, blob, len(contents), base64.StdEncoding.EncodeToString([]byte(contents)))), nil
 		}
@@ -96,8 +120,15 @@ func TestWholeApp(t *testing.T) {
 		var output any
 		switch payload.Text.Format.Name {
 		case "qa_repository_files":
-			output = map[string]any{"paths": []string{file}, "reason": "Checkout flow"}
+			paths := []string{file}
+			if file == "orders.ts" {
+				paths = append(paths, "src/shipping.ts")
+			}
+			output = map[string]any{"paths": paths, "reason": "Checkout flow"}
 		case "qa_repository_journeys":
+			if strings.Contains(payload.Input, "src/shipping.ts") {
+				file = "src/shipping.ts"
+			}
 			if !strings.Contains(payload.Input, "Order confirmed") {
 				t.Error("missing actual source content")
 			}
@@ -185,8 +216,25 @@ func TestWholeApp(t *testing.T) {
 		surveyInput["consent"] = true
 		var scan qa.SourceSurvey
 		raw := call("POST", path, "", surveyInput, 200)
-		if err := json.Unmarshal(raw, &scan); err != nil || scan.Status != "live" || scan.CommitSHA != sha || len(scan.Paths) != 1 || len(scan.Journeys) != 2 {
-			t.Fatalf("invalid live scan: %s", raw)
+		if err := json.Unmarshal(raw, &scan); err != nil {
+			t.Fatal(err)
+		}
+		wantFiles := 1
+		if source.Role == "backend" {
+			wantFiles = 2
+			for i := 0; i < 2; i++ {
+				if scan.Status != "scanning" || scan.BatchesRead != i || scan.Batches != 2 {
+					t.Fatalf("bad checkpoint: %+v", scan)
+				}
+				call("POST", taskPath+"/chat", "", input, 400)
+				raw = call("POST", path, "", surveyInput, 200)
+				if err := json.Unmarshal(raw, &scan); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		if scan.Status != "live" || scan.CommitSHA != sha || len(scan.Paths) != wantFiles || len(scan.Journeys) != 2*wantFiles {
+			t.Fatalf("invalid scan: %s", raw)
 		}
 		if cached := call("POST", path, "", surveyInput, 200); !bytes.Equal(cached, raw) {
 			t.Fatal("retry lost the original survey")

@@ -64,3 +64,19 @@ func TestInventoryRefusesTruncationAndUnboundedTrees(t *testing.T) {
 		}
 	}
 }
+
+func TestSurveyFallsBackToDirectoriesWhenWholeTreeIsTooLarge(t *testing.T) {
+	client := New(roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if strings.Contains(r.URL.Path, "/commits/") {
+			return response(200, `{"sha":"`+commitSHA+`","commit":{"tree":{"sha":"`+treeSHA+`"}}}`), nil
+		}
+		if r.URL.Query().Get("recursive") == "1" {
+			return response(200, strings.Repeat(" ", maxMetadataBytes/2+1)), nil
+		}
+		return response(200, `{"sha":"`+treeSHA+`","tree":[{"path":"app.ts","mode":"100644","type":"blob","size":20,"sha":"`+blobSHA+`"}]}`), nil
+	}))
+	got, err := client.SurveyInventory(context.Background(), Input{Repository: "owner/repo", Ref: "main", Role: "frontend"}, "")
+	if err != nil || got.Partial || len(got.Files) != 1 || got.Files[0].Path != "app.ts" {
+		t.Fatalf("did not recover inventory: %+v %v", got, err)
+	}
+}
