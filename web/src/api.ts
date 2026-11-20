@@ -213,8 +213,14 @@ export type SourceSurvey = {
   batches?: number; batches_read?: number; inventory_excluded?: number; eligible_files?: number; status: 'scanning' | 'live' | 'saved' | 'no_files' | 'unavailable'; note?: string; paths: string[]
   journeys: {name: string; evidence: string; paths: string[]}[]; gaps: string[]
 }
+export type SetupJourney = {
+  name: string
+  expected_outcome: string
+  missing_setup: string[]
+  source_refs: string[]
+}
 export type AiProposalResponse = {
-  whole_app?: {sources: SourceSurvey[]; coverage: string[][]}
+  whole_app?: {sources: SourceSurvey[]; coverage: string[][]; needs_setup?: SetupJourney[] | null}
   provider: AiProvider
   model: string
   credential_mode?: string

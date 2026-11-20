@@ -213,6 +213,13 @@ func (a *API) chatProposal(w http.ResponseWriter, r *http.Request) {
 		}
 		reply = fmt.Sprintf("I proposed %d %s. Review the expected outcomes and browser steps before approving and running them.", len(result.Scenarios), noun)
 	}
+	if result.WholeApp != nil && len(result.WholeApp.NeedsSetup) > 0 {
+		if len(result.Scenarios) == 0 {
+			reply = "Every proposed journey needs setup. Review what each journey would verify and what it needs before it can run."
+		} else {
+			reply += " The plan also lists the journeys that need setup."
+		}
+	}
 	turn, err = a.store.FinishChat(r.Context(), projectID, turn.ID, reply, &result)
 	if err != nil {
 		planningErr = err
@@ -279,6 +286,7 @@ func runContext(appContext string, run qa.Run) (string, error) {
 // Full source context and credentials are never recovered from chat storage.
 func chatContext(appContext string, turns []qa.ChatTurn) (string, error) {
 	type historyTurn struct {
+		NeedsSetup  []qa.SetupJourney  `json:"needs_setup,omitempty"`
 		Request     string             `json:"request"`
 		Scenarios   []qa.ScenarioInput `json:"unapproved_drafts"`
 		Questions   []string           `json:"questions"`
@@ -291,12 +299,18 @@ func chatContext(appContext string, turns []qa.ChatTurn) (string, error) {
 		if turn.Status != "completed" || turn.Proposal == nil {
 			continue
 		}
-		entry := historyTurn{turn.Prompt, turn.Proposal.Scenarios, turn.Proposal.Questions, turn.Proposal.Assumptions}
+		entry := historyTurn{Request: turn.Prompt, Scenarios: turn.Proposal.Scenarios, Questions: turn.Proposal.Questions, Assumptions: turn.Proposal.Assumptions}
+		if turn.Proposal.WholeApp != nil {
+			entry.NeedsSetup = turn.Proposal.WholeApp.NeedsSetup
+		}
 		raw, err := json.Marshal(entry)
 		if err != nil {
 			return "", err
 		}
 		budget := 12000
+		if len(entry.NeedsSetup) > 0 {
+			budget = 48000
+		}
 		for _, scenario := range entry.Scenarios {
 			if qa.IsJourney(scenario.Steps) {
 				budget = 48000

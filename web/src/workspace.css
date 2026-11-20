@@ -474,3 +474,16 @@ summary { cursor: pointer; overflow-wrap: anywhere; }
 .whole-app-review p, .whole-app-review li { color: var(--secondary); font-size: 13px; overflow-wrap: anywhere; }
 .whole-app-review summary { cursor: pointer; font-weight: 600; margin-block: 8px; }
 .whole-app-review details > div { margin-block: 12px; font-size: 13px; }
+.setup-journeys { margin-block: 20px; }
+.setup-journeys h3 { margin: 0 0 8px; scroll-margin-block: 24px; }
+.setup-journey { padding: 12px 0; border-bottom: 1px solid var(--line); }
+.setup-journey > summary { cursor: pointer; font-weight: 600; overflow-wrap: anywhere; }
+.setup-journey > p { margin: 8px 0 12px; }
+.setup-journey > strong, .setup-sources { font-size: 13px; }
+.setup-journey ul { margin: 4px 0 12px; padding-inline-start: 22px; }
+.setup-journey li + li { margin-top: 4px; }
+.setup-sources { color: var(--secondary); overflow-wrap: anywhere; }
+.setup-sources summary { cursor: pointer; }
+.setup-filter { display: grid; gap: 4px; margin-block: 12px; max-width: 32rem; }
+.setup-filter label, .setup-filter span { font-size: 13px; color: var(--secondary); }
+.setup-filter input { min-width: 0; }

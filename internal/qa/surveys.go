@@ -135,8 +135,17 @@ type SurveyWork struct {
 	Pending [][]repository.SurveyFile `json:"pending_files,omitempty"`
 }
 
+// SetupJourney describes an evidenced flow which does not yet have executable steps.
+type SetupJourney struct {
+	Name            string   `json:"name"`
+	ExpectedOutcome string   `json:"expected_outcome"`
+	MissingSetup    []string `json:"missing_setup"`
+	SourceRefs      []string `json:"source_refs"`
+}
+
 type WholeAppPlan struct {
-	Sources []SourceSurvey `json:"sources"`
+	NeedsSetup []SetupJourney `json:"needs_setup"`
+	Sources    []SourceSurvey `json:"sources"`
 	// Each row corresponds to one scenario and contains the source journey IDs it covers.
 	Coverage [][]string `json:"coverage"`
 }

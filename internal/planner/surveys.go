@@ -70,11 +70,18 @@ func wholeAppSchema(base json.RawMessage) (json.RawMessage, error) {
 	if err := json.Unmarshal(base, &schema); err != nil {
 		return nil, err
 	}
-	schema.Required = append(schema.Required, "coverage")
+	schema.Required = append(schema.Required, "coverage", "needs_setup")
 	schema.Properties["coverage"] = json.RawMessage(`{"type":"array","items":{"type":"array","items":{"type":"string"}}}`)
+	schema.Properties["needs_setup"] = json.RawMessage(`{
+        "type":"array","items":{"type":"object","additionalProperties":false,
+        "required":["name","expected_outcome","missing_setup","source_refs"],"properties":{
+            "name":{"type":"string"},"expected_outcome":{"type":"string"},
+            "missing_setup":{"type":"array","items":{"type":"string"}},
+            "source_refs":{"type":"array","items":{"type":"string"}}
+        }}}`)
 	return json.Marshal(schema)
 }
 
 func (p *Planner) wholeAppSpec() draftSpec {
-	return draftSpec{instructions + " This is a whole-app functional test plan with multiple independent end-to-end journeys. Join related frontend and backend evidence into a single executable journey per user flow. Start each from a reproducible entry point, exercise meaningful user actions, and assert a visible business outcome. Use distinct actor sessions and named phases where relevant. Prioritize the main functional journeys and return the evidence-backed runnable journeys together (up to 50). coverage[i] must list the supplied source journey IDs (such as R1.J1) supporting scenario i. Never silently use a shallow smoke check for a journey whose outcome is unknown. Ask for missing access, data or requirements, and state known gaps. No tests are executed during planning.", "qa_whole_app_plan", p.wholeSchema}
+	return draftSpec{instructions + " This is a whole-app functional test plan with multiple independent end-to-end journeys. Join related frontend and backend evidence into a single executable journey per user flow. Start each from a reproducible entry point, exercise meaningful user actions, and assert a visible business outcome. Use distinct actor sessions and named phases where relevant. Prioritize the main functional journeys and return the evidence-backed runnable journeys together (up to 50). coverage[i] must list the supplied source journey IDs (such as R1.J1) supporting scenario i. Never silently use a shallow smoke check for a journey whose outcome is unknown. For every distinct evidenced user journey that cannot run yet, put an entry in needs_setup (up to 50). Group related source fragments into recognizable business journeys and lead with the product's core workflow. Name the outcome a user would verify; if the business rule is unsettled, describe the decision without guessing the expected value. Give each journey its own short, concrete missing_setup list describing exactly what would unblock it. Cite the supplied journey IDs in source_refs. Never invent a product capability, setup data or runnable step. Omit unsupported or purely speculative product areas. Distinguish a ready partial check from the fuller journey that needs setup. Write for a product user; put shared questions in questions only when a decision applies across journeys, and avoid repeating missing_setup there. If every journey needs setup, return empty scenarios and coverage. No tests are executed during planning.", "qa_whole_app_plan", p.wholeSchema}
 }

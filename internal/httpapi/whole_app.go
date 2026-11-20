@@ -301,7 +301,11 @@ func validateWholeAppCoverage(plan *qa.WholeAppPlan, refs map[string]bool) error
 	if plan == nil {
 		return planner.ErrInvalidPlan
 	}
-	for _, ids := range plan.Coverage {
+	groups := slices.Clone(plan.Coverage)
+	for _, journey := range plan.NeedsSetup {
+		groups = append(groups, journey.SourceRefs)
+	}
+	for _, ids := range groups {
 		if len(ids) == 0 {
 			return fmt.Errorf("%w: a proposed journey has no source evidence", planner.ErrInvalidPlan)
 		}

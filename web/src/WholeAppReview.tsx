@@ -1,4 +1,4 @@
-import { Fragment } from 'react'
+import { Fragment, useState } from 'react'
 import type { AiProposalResponse, SourceSurvey } from './api'
 
 const sourceStatus: Record<SourceSurvey['status'], string> = {
@@ -23,18 +23,52 @@ function EvidenceFiles({source, paths}: {source: SourceSurvey; paths: string[]})
     <a href={fileURL(path)} target="_blank" rel="noreferrer">{path}</a></Fragment>)}</>
 }
 
-export default function WholeAppReview({ proposal }: { proposal: AiProposalResponse }) {
+type PlanProps = { proposal: AiProposalResponse; turnId: string }
+
+export function SetupJourneys({ proposal, turnId }: PlanProps) {
+  const [filter, setFilter] = useState('')
+  const plan = proposal.whole_app
+  const setup = plan?.needs_setup
+  if (!plan || !setup?.length) return null
+  const query = filter.trim().toLowerCase()
+  const journeys = setup.filter(journey => !query ||
+    [journey.name, journey.expected_outcome, ...journey.missing_setup].some(text => text.toLowerCase().includes(query)))
+  return <section className="setup-journeys" aria-labelledby={`setup-${turnId}`}>
+    <h3 id={`setup-${turnId}`} tabIndex={-1}>Needs setup ({setup.length})</h3>
+    {setup.length > 8 && <div className="setup-filter">
+      <label htmlFor={`filter-${turnId}`}>Find a journey or prerequisite</label>
+      <input id={`filter-${turnId}`} type="search" value={filter} onChange={event => setFilter(event.target.value)}/>
+      {query && <span role="status">{journeys.length} of {setup.length} shown</span>}
+    </div>}
+    {journeys.map((journey, i) =>
+      <details className="setup-journey" key={setup.indexOf(journey)} open={i === 0}>
+        <summary>{journey.name}</summary>
+        <p>{journey.expected_outcome}</p>
+        <strong>What’s missing</strong>
+        <ul>{journey.missing_setup.map((item, index) => <li key={index}>{item}</li>)}</ul>
+        <details className="setup-sources"><summary>Source evidence</summary>
+          {plan.sources.map((source, sourceIndex) => {
+            const paths = source.journeys.filter((_, j) => journey.source_refs.includes(`R${sourceIndex + 1}.J${j + 1}`)).flatMap(item => item.paths)
+            return paths.length > 0 && <p key={source.source_id}><strong>{source.repository}</strong> · <EvidenceFiles source={source} paths={[...new Set(paths)]}/></p>
+          })}
+        </details>
+      </details>)}
+  </section>
+}
+
+export default function WholeAppReview({ proposal, turnId }: PlanProps) {
   const plan = proposal.whole_app
   if (!plan) return null
   const candidates = plan.sources.flatMap((source, i) => source.journeys.map((journey, j) => ({
     id: `R${i + 1}.J${j + 1}`, source, journey,
   })))
-  const covered = new Set(plan.coverage.flat())
+  const setup = plan.needs_setup ?? []
+  const covered = new Set([...plan.coverage.flat(), ...setup.flatMap(journey => journey.source_refs)])
   const outside = candidates.filter(candidate => !covered.has(candidate.id)).map(({source, journey}) => `${journey.name} · ${source.repository}`)
   const gaps = plan.sources.flatMap(source => source.gaps.map(gap => `${source.repository} · ${gap}`))
   return <section className="whole-app-review" aria-label="Whole-app coverage">
     <h3>Whole-app coverage</h3>
-    <p>{plan.sources.length} project {plan.sources.length === 1 ? 'repository' : 'repositories'} · {proposal.scenarios.length} {proposal.scenarios.length === 1 ? 'journey' : 'journeys'} in this plan</p>
+    <p>{plan.sources.length} project {plan.sources.length === 1 ? 'repository' : 'repositories'} · {proposal.scenarios.length} ready for review{setup.length > 0 && <> · <button className="link-button" type="button" onClick={() => document.getElementById(`setup-${turnId}`)?.focus()}>{setup.length} {setup.length === 1 ? 'needs' : 'need'} setup</button></>}</p>
     {plan.sources.filter(source => source.note).map(source => <p key={source.source_id}><strong>{source.repository}</strong> · {source.note}</p>)}
     <details><summary>Repository evidence</summary>{plan.sources.map(source => <div key={source.source_id}>
       <strong>{source.repository}</strong> · {sourceStatus[source.status]} · {source.ref} {source.commit_sha && <>· <code>{source.commit_sha.slice(0,12)}</code></>}
@@ -44,6 +78,6 @@ export default function WholeAppReview({ proposal }: { proposal: AiProposalRespo
       {candidates.filter(candidate=>plan.coverage[i]?.includes(candidate.id)).map(({id,source,journey})=>
         <li key={id}>{source.repository} · {journey.name} · <EvidenceFiles source={source} paths={journey.paths} /></li>)}
     </ul></div>)}</details>
-    {(outside.length>0 || gaps.length>0) && <details><summary>Outside this plan ({outside.length+gaps.length})</summary><ul>{[...outside,...gaps].map((line,i)=><li key={i}>{line}</li>)}</ul></details>}
+    {(outside.length>0 || gaps.length>0) && <details><summary>Additional source findings ({outside.length+gaps.length})</summary><ul>{[...outside,...gaps].map((line,i)=><li key={i}>{line}</li>)}</ul></details>}
   </section>
 }

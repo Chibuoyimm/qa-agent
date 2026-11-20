@@ -132,7 +132,7 @@ func TestWholeApp(t *testing.T) {
 			if !strings.Contains(payload.Input, "Order confirmed") {
 				t.Error("missing actual source content")
 			}
-			output = map[string]any{"journeys": []qa.InferredJourney{{Name: "Order confirmation", Evidence: "From / click checkout, then status shows Order confirmed on /receipt", Paths: []string{file}}, {Name: "Track a shipment", Evidence: "From / click track, expect shipping to say Delivered.", Paths: []string{file}}}, "gaps": []string{"Guest cancellation has no documented expected result"}}
+			output = map[string]any{"journeys": []qa.InferredJourney{{Name: "Order confirmation", Evidence: "From / click checkout, then status shows Order confirmed on /receipt", Paths: []string{file}}, {Name: "Track a shipment", Evidence: "From / click track, expect shipping to say Delivered.", Paths: []string{file}}, {Name: "Cancel a guest order", Evidence: "A customer can cancel a pending order if its guest reference is available.", Paths: []string{file}}}, "gaps": []string{"Guest cancellation has no documented expected result"}}
 		case "qa_whole_app_plan":
 			if !strings.Contains(payload.Input, "shop/backend") || !strings.Contains(payload.Input, "shop/frontend") {
 				t.Error("planner missing a project repository")
@@ -141,7 +141,17 @@ func TestWholeApp(t *testing.T) {
 			if strings.Contains(payload.Input, "unrecognised evidence fixture") {
 				coverage[0][0] = "R99.J23"
 			}
-			output = map[string]any{"scenarios": []qa.ScenarioInput{scenario, tracking}, "questions": []string{}, "assumptions": []string{}, "coverage": coverage}
+			setup := qa.SetupJourney{Name: "Cancel a guest order", ExpectedOutcome: "The pending order is cancelled.", MissingSetup: []string{"Provide a pending guest order and its cancellation reference."}, SourceRefs: []string{"R1.J3", "R2.J3"}}
+			scenarios := []qa.ScenarioInput{scenario, tracking}
+			switch {
+			case strings.Contains(payload.Input, "setup-only fixture"):
+				scenarios, coverage = []qa.ScenarioInput{}, [][]string{}
+			case strings.Contains(payload.Input, "invalid setup reference fixture"):
+				setup.SourceRefs = []string{"R8.J4"}
+			case strings.Contains(payload.Input, "empty setup requirement fixture"):
+				setup.MissingSetup = []string{}
+			}
+			output = map[string]any{"scenarios": scenarios, "questions": []string{}, "assumptions": []string{}, "coverage": coverage, "needs_setup": []qa.SetupJourney{setup}}
 		default:
 			return nil, fmt.Errorf("unexpected model operation %s", payload.Text.Format.Name)
 		}
@@ -233,7 +243,7 @@ func TestWholeApp(t *testing.T) {
 				}
 			}
 		}
-		if scan.Status != "live" || scan.CommitSHA != sha || len(scan.Paths) != wantFiles || len(scan.Journeys) != 2*wantFiles {
+		if scan.Status != "live" || scan.CommitSHA != sha || len(scan.Paths) != wantFiles || len(scan.Journeys) != 3*wantFiles {
 			t.Fatalf("invalid scan: %s", raw)
 		}
 		if cached := call("POST", path, "", surveyInput, 200); !bytes.Equal(cached, raw) {
@@ -245,12 +255,26 @@ func TestWholeApp(t *testing.T) {
 	if err := json.Unmarshal(raw, &drafted); err != nil || drafted.Proposal == nil || drafted.Proposal.WholeApp == nil || len(drafted.Proposal.WholeApp.Sources) != 2 || len(drafted.Proposal.Scenarios) != 2 || drafted.Proposal.Scenarios[0].Approved || drafted.RunID != "" {
 		t.Fatalf("unexpected draft: %s", raw)
 	}
+	if len(drafted.Proposal.WholeApp.NeedsSetup) != 1 || drafted.Proposal.WholeApp.NeedsSetup[0].MissingSetup[0] != "Provide a pending guest order and its cancellation reference." {
+		t.Fatal("lost setup requirements in the saved plan")
+	}
+	call("POST", taskPath+"/approve", "", qa.TaskApprovalInput{TurnID: drafted.ID, Drafts: []qa.ReviewedDraft{{Index: 2, ScenarioInput: scenario}}}, 400)
 	if checks, err := store.ListScenarios(ctx, project.ID); err != nil || len(checks) != 0 {
 		t.Fatal("drafting persisted runnable checks before approval")
 	}
 	input["context"] = "unrecognised evidence fixture"
 	input["request_id"] = strings.Repeat("2", 32)
 	call("POST", taskPath+"/chat", "", input, 502)
+	for i, value := range []string{"invalid setup reference fixture", "empty setup requirement fixture"} {
+		input["context"], input["request_id"] = value, strings.Repeat(fmt.Sprint(i+3), 32)
+		call("POST", taskPath+"/chat", "", input, 502)
+	}
+	input["context"], input["request_id"] = "setup-only fixture", strings.Repeat("5", 32)
+	raw = call("POST", taskPath+"/chat", "", input, 200)
+	var setupOnly qa.ChatTurn
+	if err := json.Unmarshal(raw, &setupOnly); err != nil || setupOnly.Status != "completed" || len(setupOnly.Proposal.Scenarios) != 0 || len(setupOnly.Proposal.WholeApp.NeedsSetup) != 1 || !strings.Contains(setupOnly.Reply, "Every proposed journey needs setup") {
+		t.Fatal("a plan can consist entirely of journeys needing setup")
+	}
 	delete(input, "context")
 	if os.Getenv("QA_VERIFY_WHOLE_APP_BROWSER") == "1" {
 		t.Run("browser approval and worker execution", func(t *testing.T) {

@@ -341,6 +341,7 @@ type providerOutputItem struct {
 }
 
 type proposalOutput struct {
+	NeedsSetup  []qa.SetupJourney  `json:"needs_setup,omitempty"`
 	Coverage    [][]string         `json:"coverage,omitempty"`
 	Scenarios   []qa.ScenarioInput `json:"scenarios"`
 	Questions   []string           `json:"questions"`
@@ -385,7 +386,10 @@ func (p *Planner) Propose(ctx context.Context, in Input, byokKey string) (Result
 	if len(proposed.Scenarios) > maxScenarios || len(proposed.Questions) > 20 || len(proposed.Assumptions) > 20 || proposed.Scenarios == nil || proposed.Questions == nil || proposed.Assumptions == nil {
 		return Result{}, fmt.Errorf("%w: missing or excessive plan sections", ErrInvalidPlan)
 	}
-	if len(proposed.Scenarios) == 0 && len(proposed.Questions) == 0 {
+	if !in.WholeApp && proposed.NeedsSetup != nil {
+		return Result{}, fmt.Errorf("%w: setup journeys require a whole-app plan", ErrInvalidPlan)
+	}
+	if len(proposed.Scenarios) == 0 && len(proposed.Questions) == 0 && len(proposed.NeedsSetup) == 0 {
 		return Result{}, fmt.Errorf("%w: no checks or questions", ErrInvalidPlan)
 	}
 	for i := range proposed.Scenarios {
@@ -420,7 +424,22 @@ func (p *Planner) Propose(ctx context.Context, in Input, byokKey string) (Result
 		if proposed.Coverage == nil || len(proposed.Coverage) != len(proposed.Scenarios) {
 			return Result{}, fmt.Errorf("%w: missing journey coverage", ErrInvalidPlan)
 		}
-		whole = &qa.WholeAppPlan{Coverage: proposed.Coverage}
+		if proposed.NeedsSetup == nil || len(proposed.NeedsSetup) > 50 {
+			return Result{}, fmt.Errorf("%w: missing or excessive setup journeys", ErrInvalidPlan)
+		}
+		for _, journey := range proposed.NeedsSetup {
+			if strings.TrimSpace(journey.Name) == "" || len(journey.Name) > 200 ||
+				strings.TrimSpace(journey.ExpectedOutcome) == "" || len(journey.ExpectedOutcome) > 4000 ||
+				len(journey.MissingSetup) == 0 || len(journey.MissingSetup) > 20 {
+				return Result{}, fmt.Errorf("%w: a setup journey requires a name, outcome and missing prerequisites", ErrInvalidPlan)
+			}
+			for _, item := range journey.MissingSetup {
+				if strings.TrimSpace(item) == "" || len(item) > 2000 {
+					return Result{}, fmt.Errorf("%w: invalid setup prerequisite", ErrInvalidPlan)
+				}
+			}
+		}
+		whole = &qa.WholeAppPlan{Coverage: proposed.Coverage, NeedsSetup: proposed.NeedsSetup}
 	}
 	return Result{WholeApp: whole, CredentialMode: in.CredentialMode, ChatGPTProfileID: in.ChatGPTProfileID, Provider: providerName, Model: in.Model, ContextSHA256: hex.EncodeToString(hash[:]), Scenarios: proposed.Scenarios, Questions: proposed.Questions, Assumptions: proposed.Assumptions, RepositorySnapshots: []qa.RepositorySummary{}}, nil
 }
