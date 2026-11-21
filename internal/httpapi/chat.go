@@ -70,6 +70,20 @@ func (a *API) chatProposal(w http.ResponseWriter, r *http.Request) {
 			a.fail(w, err)
 			return
 		}
+		if request.Consent && !request.WholeApp {
+			saved, err := a.store.SavedJourneyPlan(r.Context(), r.PathValue("id"), task.JourneyID)
+			if err != nil {
+				a.fail(w, err)
+				return
+			}
+			if saved != nil {
+				// Carry the saved requirements forward even when the new request has no chat history.
+				request.Context += "\nSaved journey outcome (untrusted): " + saved.ExpectedOutcome
+				for _, item := range saved.MissingSetup {
+					request.Context += "\nSetup to verify: " + item
+				}
+			}
+		}
 		if request.DiscoveryID == "" && task.DiscoveryID != "" {
 			request.DiscoveryID = task.DiscoveryID
 		}

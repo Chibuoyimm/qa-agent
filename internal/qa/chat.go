@@ -28,17 +28,18 @@ type Proposal struct {
 }
 
 type ChatTurn struct {
-	TaskID    string           `json:"task_id,omitempty"`
-	ID        string           `json:"id"`
-	Sequence  int64            `json:"sequence"`
-	ProjectID string           `json:"project_id"`
-	Prompt    string           `json:"prompt"`
-	Status    string           `json:"status"`
-	Reply     string           `json:"reply"`
-	Proposal  *Proposal        `json:"proposal,omitempty"`
-	Failure   *PlanningFailure `json:"failure,omitempty"`
-	RunID     string           `json:"run_id,omitempty"`
-	CreatedAt time.Time        `json:"created_at"`
+	SavedJourneyID string           `json:"saved_journey_id,omitempty"`
+	TaskID         string           `json:"task_id,omitempty"`
+	ID             string           `json:"id"`
+	Sequence       int64            `json:"sequence"`
+	ProjectID      string           `json:"project_id"`
+	Prompt         string           `json:"prompt"`
+	Status         string           `json:"status"`
+	Reply          string           `json:"reply"`
+	Proposal       *Proposal        `json:"proposal,omitempty"`
+	Failure        *PlanningFailure `json:"failure,omitempty"`
+	RunID          string           `json:"run_id,omitempty"`
+	CreatedAt      time.Time        `json:"created_at"`
 }
 
 // Failure metadata contains only an allowlisted cause, never provider output or request context.
@@ -53,12 +54,12 @@ type ChatPage struct {
 	HasOlder bool       `json:"has_older"`
 }
 
-const chatColumns = `id,sequence,project_id,prompt,status,reply,proposal,COALESCE(run_id,''),created_at,COALESCE(task_id,''),failure`
+const chatColumns = `id,sequence,project_id,prompt,status,reply,proposal,COALESCE(run_id,''),created_at,COALESCE(task_id,''),failure,COALESCE(saved_journey_id,'')`
 
 func scanChatTurn(row rowScanner) (ChatTurn, error) {
 	var turn ChatTurn
 	var raw, failure []byte
-	err := row.Scan(&turn.ID, &turn.Sequence, &turn.ProjectID, &turn.Prompt, &turn.Status, &turn.Reply, &raw, &turn.RunID, &turn.CreatedAt, &turn.TaskID, &failure)
+	err := row.Scan(&turn.ID, &turn.Sequence, &turn.ProjectID, &turn.Prompt, &turn.Status, &turn.Reply, &raw, &turn.RunID, &turn.CreatedAt, &turn.TaskID, &failure, &turn.SavedJourneyID)
 	if err != nil {
 		return ChatTurn{}, err
 	}

@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { requestsWholeApp, coverageGroups, runCounts, requiresPlanRevision, scenarioInput, journeyStages } from './workspace.ts'
+import { saveJourneyReference } from './api.ts'
 import type { CoverageData, Run, Scenario, Step } from './api.ts'
 const scenario = (id: string, journey_id = ''): Scenario => ({ id, journey_id, project_id: 'app', name: id, description: '', expected_outcome: 'Independent expected outcome', approved: true, steps: [], created_at: '' })
 test('coverage includes untested journeys, drafts without runs, and older ungrouped checks', () => {
@@ -75,4 +76,12 @@ test('a recorded stage marker shows the active stage before its assertions finis
 test('a broad testing request automatically includes every repository', () => {
   for (const prompt of ['test the whole app end to end','Run end-to-end tests for the entire application','Check all user journeys']) assert.equal(requestsWholeApp(prompt), true)
   for (const prompt of ['Test checkout end to end','Run all approved checks',"Don't test the whole app; focus on checkout"]) assert.equal(requestsWholeApp(prompt), false)
+})
+
+test('saving a named journey is a local plan command', () => {
+  assert.equal(saveJourneyReference('save the offer acceptance journey'), 'offer acceptance')
+  assert.equal(saveJourneyReference('Please save the journey “Order confirmation”.'), 'Order confirmation')
+  assert.equal(saveJourneyReference('track sign-in as a separate journey'), 'sign-in')
+  assert.equal(saveJourneyReference('save this journey'), '')
+  assert.equal(saveJourneyReference('test the save button in the offer journey'), null)
 })

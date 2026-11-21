@@ -119,6 +119,11 @@ func TestWholeApp(t *testing.T) {
 		}
 		var output any
 		switch payload.Text.Format.Name {
+		case "qa_scenario_proposals":
+			if !strings.Contains(payload.Input, "Provide a pending guest order and its cancellation reference.") {
+				t.Error("new request did not use saved journey requirements")
+			}
+			output = map[string]any{"scenarios": []qa.ScenarioInput{}, "questions": []string{"Which guest order should be used?"}, "assumptions": []string{}}
 		case "qa_repository_files":
 			paths := []string{file}
 			if file == "orders.ts" {
@@ -259,6 +264,48 @@ func TestWholeApp(t *testing.T) {
 		t.Fatal("lost setup requirements in the saved plan")
 	}
 	call("POST", taskPath+"/approve", "", qa.TaskApprovalInput{TurnID: drafted.ID, Drafts: []qa.ReviewedDraft{{Index: 2, ScenarioInput: scenario}}}, 400)
+	savePath := taskPath + "/save-journey"
+	save := qa.SaveJourneyInput{RequestID: strings.Repeat("7", 32), Prompt: "save the order journey", Reference: "order"}
+	var choices qa.SaveJourneyResult
+	if err := json.Unmarshal(call("POST", savePath, "", save, 200), &choices); err != nil || len(choices.Choices) < 2 || choices.PlanTurnID != drafted.ID || choices.Turn != nil {
+		t.Fatal("ambiguous references must offer a choice from the same plan")
+	}
+	save.Item, save.TurnID = "setup:0", choices.PlanTurnID
+	firstSaved := call("POST", savePath, "", save, 200)
+	var saved qa.SaveJourneyResult
+	if err := json.Unmarshal(firstSaved, &saved); err != nil || saved.Turn == nil || saved.Turn.TaskID != task.ID || saved.Turn.SavedJourneyID == "" || saved.Turn.SavedJourneyID == task.JourneyID || saved.Turn.RunID != "" {
+		t.Fatal("expected a separate tracked journey and a confirmation in the original chat")
+	}
+	if !bytes.Equal(firstSaved, call("POST", savePath, "", save, 200)) {
+		t.Fatal("retry did not return the original chat turn")
+	}
+	save.RequestID = strings.Repeat("8", 32)
+	var second qa.SaveJourneyResult
+	if err := json.Unmarshal(call("POST", savePath, "", save, 200), &second); err != nil || second.Turn.SavedJourneyID != saved.Turn.SavedJourneyID {
+		t.Fatal("duplicate journey on repeated save")
+	}
+	recorded, err := store.SavedJourneyPlan(ctx, project.ID, saved.Turn.SavedJourneyID)
+	if err != nil || recorded.TurnID != drafted.ID || len(recorded.MissingSetup) != 1 || len(recorded.SourceRefs) != 2 || len(recorded.Steps) != 0 {
+		t.Fatal("saved journey lost its original evidence or setup")
+	}
+	save.Item = "ready:1"
+	call("POST", savePath, "", save, 409)
+	save.RequestID = strings.Repeat("9", 32)
+	var ready qa.SaveJourneyResult
+	if err := json.Unmarshal(call("POST", savePath, "", save, 200), &ready); err != nil {
+		t.Fatal(err)
+	}
+	readyPlan, err := store.SavedJourneyPlan(ctx, project.ID, ready.Turn.SavedJourneyID)
+	if err != nil || len(readyPlan.Steps) != len(tracking.Steps) || readyPlan.ExpectedOutcome != tracking.ExpectedOutcome {
+		t.Fatal("saved runnable draft lost its outcome or steps")
+	}
+	other, err := store.CreateTask(ctx, project.ID, qa.TaskInput{RequestID: strings.Repeat("0", 32), JourneyID: saved.Turn.SavedJourneyID, Title: "Follow-up", Prompt: "Test this saved journey"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	save.RequestID = strings.Repeat("1", 32)
+	call("POST", root+"/tasks/"+other.ID+"/save-journey", "", save, 400)
+	call("POST", root+"/tasks/"+other.ID+"/chat", "", map[string]any{"request_id": save.RequestID, "prompt": "Test this saved journey", "model": "fixture", "credential_mode": "managed", "consent": true}, 200)
 	if checks, err := store.ListScenarios(ctx, project.ID); err != nil || len(checks) != 0 {
 		t.Fatal("drafting persisted runnable checks before approval")
 	}

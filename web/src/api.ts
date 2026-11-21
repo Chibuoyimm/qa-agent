@@ -388,6 +388,7 @@ export function validateScenario(input: unknown): ScenarioInput {
 }
 
 export type ChatTurn = {
+  saved_journey_id?: string
   task_id?: string
   id: string
   sequence: number
@@ -411,7 +412,19 @@ export function chatRunCommand(prompt: string): ChatRunAction | null {
   return null
 }
 
-export type Journey = { id: string; project_id: string; name: string; created_at: string }
+export type JourneyPlan = {task_id: string; turn_id: string; item: string; expected_outcome: string; missing_setup?: string[]; steps?: Step[]; source_refs?: string[]}
+export type JourneyChoice = {item: string; name: string}
+export type SaveJourneyResult = {turn: ChatTurn} | {plan_turn_id: string; choices: JourneyChoice[]}
+
+export function saveJourneyReference(prompt: string): string | null {
+  const command = prompt.trim().replace(/[.!?]+$/, '').match(/^(?:please\s+)?(?:save|track)\s+(.+)$/i)
+  if (!command || !/\b(?:journey|flow|workflow|check)\b/i.test(command[1])) return null
+  return command[1].replace(/\s+as (?:a |an )?(?:separate |new )?(?:journey|flow|workflow|check)$/i, '')
+    .replace(/^(?:(?:the|this|that|a|my|separate|new)\s+)*(?:journey|flow|workflow|check)\b[ :“"']*/i, '')
+    .replace(/\s+(?:journey|flow|workflow|check)(?:\s+separately)?$/i, '')
+    .replace(/^(?:the|this|that|my)\b\s*/i, '').replace(/^["“']|["”']$/g, '').trim()
+}
+export type Journey = { saved_plan?: JourneyPlan; id: string; project_id: string; name: string; created_at: string }
 export type TaskApproval = { turn_id: string; scenario_ids: string[] }
 export type TestingTask = { id: string; project_id: string; journey_id: string; title: string; request: string; discovery_id?: string; created_at: string; approvals: TaskApproval[] }
 export type CoverageCheck = { run_status?: RunStatus; last_verified?: {run_id: string; base_url: string; finished_at: string; status: "passed" | "failed"}; scenario: Scenario; result: ScenarioResult; run_id: string; base_url: string; finished_at: string }

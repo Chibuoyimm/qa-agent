@@ -52,6 +52,19 @@ func (a *API) discoverTask(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 202, discovery)
 }
+func (a *API) savePlanJourney(w http.ResponseWriter, r *http.Request) {
+	var in qa.SaveJourneyInput
+	if !decodeJSONLimit(w, r, &in, 16<<10) {
+		return
+	}
+	result, err := a.store.SavePlanJourney(r.Context(), r.PathValue("id"), r.PathValue("task_id"), in)
+	if err != nil {
+		a.fail(w, err)
+		return
+	}
+	writeJSON(w, 200, result)
+}
+
 func (a *API) approveTask(w http.ResponseWriter, r *http.Request) {
 	var in qa.TaskApprovalInput
 	if !decodeJSON(w, r, &in) {

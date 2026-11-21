@@ -57,6 +57,14 @@ try {
   assert.equal(await setup.getByRole('checkbox').count(),0);
   await setup.getByText('Source evidence',{exact:true}).click();
   assert.ok(await setup.getByRole('link',{name:'checkout.tsx'}).isVisible());
+  await message.fill('save the order journey');
+  await page.getByRole('button',{name:'Save journey',exact:true}).click();
+  await page.getByRole('combobox',{name:/Which journey did you mean/}).selectOption({label:'Cancel a guest order'});
+  await page.getByRole('button',{name:'Save selected journey',exact:true}).click();
+  await page.getByRole('link',{name:'View saved journey in Coverage'}).click();
+  const tracked = page.locator('.journey-card').filter({has:page.getByText('Cancel a guest order',{exact:true})});
+  await tracked.getByText('Provide a pending guest order and its cancellation reference.').waitFor();
+  await tracked.getByRole('link',{name:'Open source plan'}).click();
   await review.getByText('Repository evidence',{exact:true}).click();
   assert.ok((await review.innerText()).includes('shop/frontend · Order confirmation · checkout.tsx'));
   assert.ok((await review.innerText()).includes('shop/backend · Order confirmation · orders.ts'));

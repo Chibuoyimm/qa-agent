@@ -15,10 +15,11 @@ import (
 )
 
 type Journey struct {
-	ID        string    `json:"id"`
-	ProjectID string    `json:"project_id"`
-	Name      string    `json:"name"`
-	CreatedAt time.Time `json:"created_at"`
+	SavedPlan *JourneyPlan `json:"saved_plan,omitempty"`
+	ID        string       `json:"id"`
+	ProjectID string       `json:"project_id"`
+	Name      string       `json:"name"`
+	CreatedAt time.Time    `json:"created_at"`
 }
 type TaskApproval struct {
 	TurnID      string   `json:"turn_id"`
@@ -72,7 +73,7 @@ func (s *Store) ListJourneys(ctx context.Context, projectID string) ([]Journey, 
 	if _, err := s.GetProject(ctx, projectID); err != nil {
 		return nil, err
 	}
-	rows, err := s.db.Query(ctx, `SELECT id,project_id,name,created_at FROM journeys WHERE project_id=$1 ORDER BY created_at,id`, projectID)
+	rows, err := s.db.Query(ctx, `SELECT id,project_id,name,created_at,saved_plan FROM journeys WHERE project_id=$1 ORDER BY created_at,id`, projectID)
 	if err != nil {
 		return nil, err
 	}
@@ -80,7 +81,7 @@ func (s *Store) ListJourneys(ctx context.Context, projectID string) ([]Journey, 
 	list := []Journey{}
 	for rows.Next() {
 		var j Journey
-		if err := rows.Scan(&j.ID, &j.ProjectID, &j.Name, &j.CreatedAt); err != nil {
+		if err := rows.Scan(&j.ID, &j.ProjectID, &j.Name, &j.CreatedAt, &j.SavedPlan); err != nil {
 			return nil, err
 		}
 		list = append(list, j)

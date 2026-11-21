@@ -487,3 +487,7 @@ summary { cursor: pointer; overflow-wrap: anywhere; }
 .setup-filter { display: grid; gap: 4px; margin-block: 12px; max-width: 32rem; }
 .setup-filter label, .setup-filter span { font-size: 13px; color: var(--secondary); }
 .setup-filter input { min-width: 0; }
+
+.saved-journey-plan { margin-block: 12px; }
+.saved-journey-plan p, .saved-journey-plan ul, .saved-journey-plan ol { margin-block: 4px 12px; }
+.saved-journey-plan details { margin-block: 8px; }

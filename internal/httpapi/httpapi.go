@@ -64,6 +64,7 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("POST /api/projects/{id}/tasks", a.authorize(a.apiToken, a.createTask))
 	mux.Handle("GET /api/projects/{id}/tasks/{task_id}", a.authorize(a.apiToken, a.getTask))
 	mux.Handle("POST /api/projects/{id}/tasks/{task_id}/discovery", a.authorize(a.apiToken, a.discoverTask))
+	mux.Handle("POST /api/projects/{id}/tasks/{task_id}/save-journey", a.authorize(a.apiToken, a.savePlanJourney))
 	mux.Handle("POST /api/projects/{id}/tasks/{task_id}/approve", a.authorize(a.apiToken, a.approveTask))
 	mux.Handle("GET /api/projects/{id}/tasks/{task_id}/chat", a.authorize(a.apiToken, a.listChat))
 	mux.Handle("POST /api/projects/{id}/tasks/{task_id}/chat", a.authorize(a.apiToken, a.chatProposal))
@@ -183,6 +184,8 @@ func (a *API) fail(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, qa.ErrNotFound):
 		writeError(w, http.StatusNotFound, "record not found")
+	case errors.Is(err, qa.ErrJourneyNameTaken):
+		writeError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, qa.ErrConflict):
 		writeError(w, http.StatusConflict, "invalid state or lease")
 	case errors.Is(err, opencode.ErrInvalid):
