@@ -123,6 +123,9 @@ func (a *API) Handler() http.Handler {
 		deadline := 25 * time.Second
 		if r.Method == http.MethodPost && (strings.HasSuffix(r.URL.Path, "/proposals") || strings.HasSuffix(r.URL.Path, "/chat") || strings.Contains(r.URL.Path, "/source-surveys/")) {
 			deadline = 370 * time.Second
+			if strings.Contains(r.URL.Path, "/tasks/") && strings.HasSuffix(r.URL.Path, "/chat") {
+				deadline = qa.SetupResolutionTimeout + 5*time.Second
+			}
 		} else if r.Method == http.MethodPost && (strings.HasSuffix(r.URL.Path, "/repositories/sync") || strings.HasSuffix(r.URL.Path, "/repository-sources")) {
 			deadline = 50 * time.Second
 		} else if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/repositories/search") {

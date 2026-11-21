@@ -40,8 +40,13 @@ func (a *API) listChat(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, page)
 }
 
+type setupRunRequest struct {
+	Reference string `json:"reference"`
+	Target    string `json:"target"`
+}
 type chatProposalInput struct {
-	SurveyBatch string `json:"survey_batch,omitempty"`
+	Resolve     *setupRunRequest `json:"resolve_and_run,omitempty"`
+	SurveyBatch string           `json:"survey_batch,omitempty"`
 	planner.Input
 	SavedFlowID  string `json:"saved_flow_id,omitempty"`
 	RequestID    string `json:"request_id"`
@@ -69,6 +74,15 @@ func (a *API) chatProposal(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, qa.ErrInvalid)
 		return
 	}
+	if request.Resolve != nil {
+		a.resolveJourneyChat(w, r, request, fingerprint)
+		return
+	}
+	// Ordinary drafting keeps its single-proposal budget. Setup resolution above
+	// can involve independent reads and multiple provider requests.
+	ctx, cancel := context.WithTimeout(r.Context(), 370*time.Second)
+	defer cancel()
+	r = r.WithContext(ctx)
 	var preparedFlow string
 	if taskID != "" {
 		task, err := a.store.GetTask(r.Context(), r.PathValue("id"), taskID)

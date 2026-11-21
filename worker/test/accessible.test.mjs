@@ -6,6 +6,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { chromium } from 'playwright';
 import { executeScenario } from '../src/execute.ts';
+import { parseLocator } from '../src/contract.ts';
+import { stepLocator } from '../src/locator.ts';
 import { discover } from '../src/discover.ts';
 
 test('real browser discovers and executes named controls without test IDs; ambiguous actions never click', async () => {
@@ -46,4 +48,18 @@ test('real browser discovers and executes named controls without test IDs; ambig
  } finally {
   await browser.close(); await new Promise(r=>server.close(r)); await rm(root,{recursive:true,force:true});
  }
+});
+
+test('a named confirmation dialog disambiguates identical actions', async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    await page.setContent(`<button>Confirm</button><div role="dialog" aria-label="Review order"><button onclick="this.textContent='Done'">Confirm</button></div>`);
+    assert.equal(await page.getByRole('button', {name:'Confirm', exact:true}).count(), 2);
+    const locator = parseLocator({role:'button', name:'Confirm', within_dialog:'Review order'});
+    await stepLocator(page, {locator}).click();
+    assert.equal(await page.getByRole('dialog').getByRole('button').innerText(), 'Done');
+    assert.equal(await page.getByRole('button', {name:'Confirm', exact:true}).count(), 1);
+    assert.throws(() => parseLocator({...locator, within_dialog: ' '}), /dialog/);
+  } finally { await browser.close(); }
 });

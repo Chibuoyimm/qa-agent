@@ -39,7 +39,10 @@ export function assertionKey(steps: Step[]) {
 export function requiresPlanRevision(original: ScenarioInput, draft: ScenarioInput) {
   return original.expected_outcome !== draft.expected_outcome && assertionKey(original.steps) === assertionKey(draft.steps)
 }
-export const targetLabel = (step: Step) => step.locator?.label || (step.locator?.role ? `${step.locator.role} “${step.locator.name}”` : (step.test_id ?? 'control').replaceAll('-', ' ').replaceAll('_', ' '))
+export function targetLabel(step: Step) {
+  const target = step.locator?.label || (step.locator?.role ? `${step.locator.role} “${step.locator.name}”` : (step.test_id ?? 'control').replaceAll('-', ' ').replaceAll('_', ' '))
+  return step.locator?.within_dialog ? `${target} in “${step.locator.within_dialog}”` : target
+}
 export function stepLabel(step: Step): string {
   const target = targetLabel(step)
   switch (step.action) {

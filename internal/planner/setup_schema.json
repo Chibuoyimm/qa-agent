@@ -1,0 +1,276 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["scenarios", "questions", "assumptions"],
+  "properties": {
+    "scenarios": {
+      "type": "array",
+      "description": "Unapproved scenario drafts.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "description", "expected_outcome", "steps"],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "expected_outcome": {
+            "type": "string"
+          },
+          "steps": {
+            "type": "array",
+            "description": "Up to 50 steps for checks, or up to 200 ordered steps for a complete journey. Include assertions.",
+            "minItems": 1,
+            "items": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "action": {
+                      "type": "string",
+                      "enum": ["phase", "use_actor", "prepare_fixture", "cleanup_fixture"]
+                    },
+                    "value": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["action", "value"]
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "action": {
+                      "type": "string",
+                      "enum": ["navigate", "assert_path"]
+                    },
+                    "path": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["action", "path"]
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "action": {
+                      "type": "string",
+                      "enum": ["capture_id"]
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "save_as": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["action", "path", "save_as"]
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "action": {
+                      "type": "string",
+                      "enum": ["capture_json"]
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "json_pointer": {
+                      "type": "string"
+                    },
+                    "save_as": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["action", "path", "json_pointer", "save_as"]
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "action": {
+                      "type": "string",
+                      "enum": ["assert_json"]
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "json_pointer": {
+                      "type": "string"
+                    },
+                    "value": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["action", "path", "json_pointer", "value"]
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "action": {
+                      "type": "string",
+                      "enum": ["assert_json"]
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "json_pointer": {
+                      "type": "string"
+                    },
+                    "value_ref": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9_]{0,39}$"
+                    }
+                  },
+                  "required": ["action", "path", "json_pointer", "value_ref"]
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "action": {
+                      "type": "string",
+                      "enum": ["assert_json_number"]
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "json_pointer": {
+                      "type": "string"
+                    },
+                    "value": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["action", "path", "json_pointer", "value"]
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "action": {
+                      "type": "string",
+                      "enum": ["click", "assert_visible", "assert_absent"]
+                    },
+                    "test_id": {
+                      "type": ["string", "null"]
+                    },
+                    "locator": {
+                      "$ref": "#/$defs/locator"
+                    }
+                  },
+                  "required": ["action", "test_id", "locator"]
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "action": {
+                      "type": "string",
+                      "enum": ["assert_text", "select_option"]
+                    },
+                    "test_id": {
+                      "type": ["string", "null"]
+                    },
+                    "locator": {
+                      "$ref": "#/$defs/locator"
+                    },
+                    "value": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["action", "test_id", "locator", "value"]
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "action": {
+                      "type": "string",
+                      "enum": ["fill"]
+                    },
+                    "test_id": {
+                      "type": ["string", "null"]
+                    },
+                    "locator": {
+                      "$ref": "#/$defs/locator"
+                    },
+                    "value": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["action", "test_id", "locator", "value"]
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "action": {
+                      "type": "string",
+                      "enum": ["fill"]
+                    },
+                    "test_id": {
+                      "type": ["string", "null"]
+                    },
+                    "locator": {
+                      "$ref": "#/$defs/locator"
+                    },
+                    "secret_env": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["action", "test_id", "locator", "secret_env"]
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "questions": {
+      "type": "array",
+      "description": "At most 20 focused questions, each at most 4000 characters.",
+      "items": {
+        "type": "string"
+      }
+    },
+    "assumptions": {
+      "type": "array",
+      "description": "At most 20 assumptions, each at most 4000 characters.",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "$defs": {
+    "locator": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["role", "name", "label", "within_dialog"],
+      "properties": {
+        "within_dialog": {
+          "type": ["string", "null"],
+          "description": "Exact accessible name of the enclosing dialog, or null for a page-wide target."
+        },
+        "role": {
+          "type": ["string", "null"],
+          "enum": ["button", "link", "textbox", "heading", "checkbox", "radio", "combobox", "option", "tab", "menuitem", "alert", "status", "dialog", "region", "switch", "spinbutton", "searchbox", null]
+        },
+        "name": {
+          "type": ["string", "null"]
+        },
+        "label": {
+          "type": ["string", "null"]
+        }
+      }
+    }
+  }
+}

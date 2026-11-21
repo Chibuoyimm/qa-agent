@@ -1,6 +1,6 @@
 export type StepAction = 'navigate' | 'fill' | 'click' | 'assert_text' | 'assert_visible' | 'assert_absent' | 'assert_path' | 'select_option' | 'phase' | 'use_actor' | 'prepare_fixture' | 'cleanup_fixture' | 'capture_id' | 'capture_json' | 'assert_json' | 'assert_json_number'
 
-export type ElementLocator = { role?: string; name?: string; label?: string }
+export type ElementLocator = { within_dialog?: string; role?: string; name?: string; label?: string }
 
 export type Step = {
   action: StepAction
@@ -220,6 +220,7 @@ export type SetupJourney = {
   source_refs: string[]
 }
 export type AiProposalResponse = {
+  resolution?: {target: string; sources: {repository: string; commit?: string; paths: string[]; note?: string}[]}
   saved_flow_id?: string
   whole_app?: {sources: SourceSurvey[]; coverage: string[][]; needs_setup?: SetupJourney[] | null}
   provider: AiProvider
@@ -291,13 +292,15 @@ export function validateLocator(value: unknown): ElementLocator {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Choose a field label or role and exact name.')
   const locator = value as Record<string, unknown>
   const validName = (name: unknown): name is string => typeof name === 'string' && Boolean(name.trim()) && new TextEncoder().encode(name).length <= 300 && !/[\x00-\x08\x0a-\x1f]/.test(name)
-  if (Object.keys(locator).some(key => !['role', 'name', 'label'].includes(key))) throw new Error('Unsupported accessible target field.')
+  if (Object.keys(locator).some(key => !['role', 'name', 'label', 'within_dialog'].includes(key))) throw new Error('Unsupported accessible target field.')
+  if (locator.within_dialog != null && !validName(locator.within_dialog)) throw new Error('Use the exact dialog name.')
+  const scope = typeof locator.within_dialog === 'string' ? {within_dialog:locator.within_dialog} : {}
   if (locator.label !== undefined) {
     if (!validName(locator.label) || locator.role !== undefined || locator.name !== undefined) throw new Error('A field label must be used on its own.')
-    return { label: locator.label }
+    return { ...scope, label: locator.label }
   }
   if (typeof locator.role !== 'string' || !locatorRoles.includes(locator.role) || !validName(locator.name)) throw new Error('Choose a supported role and exact accessible name.')
-  return { role: locator.role, name: locator.name }
+  return { ...scope, role: locator.role, name: locator.name }
 }
 
 const bindingName = /^[a-z][a-z0-9_]{0,39}$/
@@ -417,6 +420,20 @@ export function chatRunCommand(prompt: string): ChatRunAction | null {
 export type JourneyPlan = {task_id: string; turn_id: string; item: string; expected_outcome: string; missing_setup?: string[]; steps?: Step[]; source_refs?: string[]}
 export type JourneyChoice = {item: string; name: string}
 export type SaveJourneyResult = {turn: ChatTurn} | {plan_turn_id?: string; choices: JourneyChoice[]}
+
+// An explicit run request changes the action shown before the user sends it.
+export function setupRunReference(prompt: string): string | null {
+  const text = prompt.trim().replace(/^(?:can|could|would) you (?:please )?(?=(?:figure out|find|resolve|use|set up|run)\b)(.+?)\??$/i, '$1').replace(/[.!]+$/, '')
+  if (/^(?:can|could|would|should|how|what|why|is|does|did)\b/i.test(text) || /\?|\b(?:if|unless|never|without running|do not|don['’]t|before running|dry run)\b/i.test(text)) return null
+  if (!/^(?:please\s+)?(?:figure out|work out|find|check|resolve|use|read|inspect|look|prepare|fill|set up|run|rerun|execute|handle|get)\b/i.test(text)) return null
+  if (!/\b(?:setup|set up|prerequisites?|fixtures?|what['’]s available)\b/i.test(text)) return null
+  const run = text.match(/\b(?:run|rerun|execute)\s+(?:(?:the|my|saved)\s+)*([^.,;:\n]+)/i)
+  if (!run) return null
+  const subject = run[1].split(/\s+(?:after|using|with|once|and|from)\s+/i)[0].trim()
+  if (/^(?:it|this|that|(?:this |that )?(?:journey|flow|workflow))$/i.test(subject)) return ''
+  const name = subject.match(/^(.+?)\s+(?:journey|flow|workflow)$/i)
+  return name ? name[1].trim() : null
+}
 
 export function runJourneyReference(prompt: string): string | null {
   const command = prompt.trim().replace(/[.!?]+$/, '').match(/^(?:please\s+)?(?:run|rerun)\s+(?:(?:the|my)\s+)?(?:saved\s+)?(.+)$/i)

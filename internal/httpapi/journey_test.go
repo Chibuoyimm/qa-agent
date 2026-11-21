@@ -72,4 +72,21 @@ func verifyJourneyHTTP(t *testing.T, store *qa.Store) {
 	if response = send(); response.Code != 400 || calls != 1 {
 		t.Fatalf("fixture crossed its target boundary: %d, calls %d", response.Code, calls)
 	}
+	task, err := store.CreateTask(t.Context(), project.ID, qa.TaskInput{RequestID: strings.Repeat("e", 32), Title: "Account", Prompt: "Check account access", JourneyName: "Account"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	delete(input, "fixture_id")
+	input["request_id"] = strings.Repeat("c", 32)
+	input["resolve_and_run"] = map[string]string{"reference": "Account", "target": project.BaseURL}
+	raw, _ := json.Marshal(input)
+	req := httptest.NewRequest("POST", "/api/projects/"+project.ID+"/tasks/"+task.ID+"/chat", strings.NewReader(string(raw)))
+	req.Header.Set("Authorization", "Bearer operator")
+	blocked := httptest.NewRecorder()
+	handler.ServeHTTP(blocked, req)
+	var missing qa.ChatTurn
+	if blocked.Code != 200 || json.Unmarshal(blocked.Body.Bytes(), &missing) != nil || missing.RunID != "" || missing.Proposal == nil || len(missing.Proposal.Questions) != 1 || !strings.Contains(missing.Proposal.Questions[0], "repository") || calls != 1 {
+		t.Fatalf("missing repository: %d %s", blocked.Code, blocked.Body.String())
+	}
+
 }

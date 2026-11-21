@@ -45,6 +45,21 @@ func savedCandidates(ctx context.Context, tx pgx.Tx, project string) ([]journeyC
 	return items, rows.Err()
 }
 
+func matchNamedJourneys(items []journeyCandidate, reference string) []journeyCandidate {
+	var matches []journeyCandidate
+	query := journeyWords(reference)
+	for _, item := range items {
+		if strings.EqualFold(strings.TrimSpace(reference), item.Name) {
+			matches = []journeyCandidate{item}
+			break
+		}
+		if titleMatch(item.Name, query) > 0 || slices.ContainsFunc(item.aliases, func(alias string) bool { return titleMatch(alias, query) > 0 }) {
+			matches = append(matches, item)
+		}
+	}
+	return matches
+}
+
 // The latest deliberately prepared revision supersedes the original saved item.
 // Copies displayed for review keep the original version and cannot supersede it.
 func journeyDraft(ctx context.Context, tx pgx.Tx, project, journey string) (Proposal, []string, int, error) {
@@ -173,17 +188,7 @@ func (s *Store) RunSavedJourney(ctx context.Context, project, task string, in Ru
 	if err != nil {
 		return out, err
 	}
-	var matches []journeyCandidate
-	query := journeyWords(in.Reference)
-	for _, item := range items {
-		if strings.EqualFold(strings.TrimSpace(in.Reference), item.Name) {
-			matches = []journeyCandidate{item}
-			break
-		}
-		if titleMatch(item.Name, query) > 0 || slices.ContainsFunc(item.aliases, func(alias string) bool { return titleMatch(alias, query) > 0 }) {
-			matches = append(matches, item)
-		}
-	}
+	matches := matchNamedJourneys(items, in.Reference)
 	if in.JourneyID != "" {
 		i := slices.IndexFunc(items, func(c journeyCandidate) bool { return c.Item == in.JourneyID })
 		if i < 0 {

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 
 export const locatorRoles = ['button', 'link', 'textbox', 'heading', 'checkbox', 'radio', 'combobox', 'option', 'tab', 'menuitem', 'alert', 'status', 'dialog', 'region', 'switch', 'spinbutton', 'searchbox'] as const;
-export type ElementLocator = { role?: typeof locatorRoles[number]; name?: string; label?: string };
+export type ElementLocator = { within_dialog?: string; role?: typeof locatorRoles[number]; name?: string; label?: string };
 
 export type Step = {
   action: 'navigate' | 'fill' | 'click' | 'assert_text' | 'assert_visible' | 'assert_absent' | 'assert_path' | 'select_option' | 'phase' | 'use_actor' | 'prepare_fixture' | 'cleanup_fixture' | 'capture_id' | 'capture_json' | 'assert_json' | 'assert_json_number';
@@ -40,15 +40,17 @@ function onlyFields(value: Record<string, unknown>, fields: string[]): boolean {
 }
 
 export function parseLocator(value: unknown): ElementLocator {
-  if (!record(value) || !onlyFields(value, ['role', 'name', 'label'])) throw new Error('Invalid accessible locator');
+  if (!record(value) || !onlyFields(value, ['role', 'name', 'label', 'within_dialog'])) throw new Error('Invalid accessible locator');
   const validName = (name: unknown): name is string => typeof name === 'string' && name.trim().length > 0 && Buffer.byteLength(name) <= 300 && !/[\x00-\x08\x0a-\x1f]/.test(name);
+  if (value.within_dialog != null && !validName(value.within_dialog)) throw new Error('Invalid dialog name');
+  const scope = typeof value.within_dialog === 'string' ? {within_dialog:value.within_dialog} : {};
   // Structured model output represents unused fields as null.
   if (value.label != null) {
     if (!validName(value.label) || value.role != null || value.name != null) throw new Error('Invalid label locator');
-    return { label: value.label };
+    return { ...scope, label: value.label };
   }
   if (!locatorRoles.includes(value.role as typeof locatorRoles[number]) || !validName(value.name)) throw new Error('Invalid role locator');
-  return { role: value.role as typeof locatorRoles[number], name: value.name };
+  return { ...scope, role: value.role as typeof locatorRoles[number], name: value.name };
 }
 
 export function parseClaim(value: unknown): Claim {

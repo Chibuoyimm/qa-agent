@@ -41,12 +41,16 @@ type Step struct {
 
 // ElementLocator uses exact accessible names; it never accepts CSS or script.
 type ElementLocator struct {
-	Role  string `json:"role,omitempty"`
-	Name  string `json:"name,omitempty"`
-	Label string `json:"label,omitempty"`
+	WithinDialog string `json:"within_dialog,omitempty"`
+	Role         string `json:"role,omitempty"`
+	Name         string `json:"name,omitempty"`
+	Label        string `json:"label,omitempty"`
 }
 
 func (l ElementLocator) Valid() bool {
+	if l.WithinDialog != "" && !validLocatorName(l.WithinDialog) {
+		return false
+	}
 	if l.Label != "" {
 		return l.Role == "" && l.Name == "" && validLocatorName(l.Label)
 	}
@@ -74,10 +78,14 @@ func (s Step) validTarget() bool {
 
 func (s Step) TargetName() string {
 	if s.Locator != nil {
-		if s.Locator.Label != "" {
-			return s.Locator.Label
+		suffix := ""
+		if s.Locator.WithinDialog != "" {
+			suffix = " in dialog “" + s.Locator.WithinDialog + "”"
 		}
-		return s.Locator.Role + " “" + s.Locator.Name + "”"
+		if s.Locator.Label != "" {
+			return s.Locator.Label + suffix
+		}
+		return s.Locator.Role + " “" + s.Locator.Name + "”" + suffix
 	}
 	if s.Path != "" {
 		if s.JSONPointer != "" {

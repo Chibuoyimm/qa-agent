@@ -13,7 +13,18 @@ import (
 )
 
 // Proposal is an unapproved draft, shared by generation and conversation history.
+type SetupSource struct {
+	Repository string   `json:"repository"`
+	Commit     string   `json:"commit,omitempty"`
+	Paths      []string `json:"paths"`
+	Note       string   `json:"note,omitempty"`
+}
+type SetupResolution struct {
+	Target  string        `json:"target"`
+	Sources []SetupSource `json:"sources"`
+}
 type Proposal struct {
+	Resolution          *SetupResolution    `json:"resolution,omitempty"`
 	SavedFlowID         string              `json:"saved_flow_id,omitempty"`
 	FlowVersion         string              `json:"flow_version,omitempty"`
 	WholeApp            *WholeAppPlan       `json:"whole_app,omitempty"`
@@ -89,6 +100,11 @@ func ValidateChatRequest(id, prompt string) error {
 	return nil
 }
 
+const SetupResolutionTimeout = 12 * time.Minute
+
+const expirePendingChatSQL = `UPDATE chat_turns SET status='error',reply=$2,failure='{"code":"interrupted","retryable":true}'::jsonb
+    WHERE project_id=$1 AND status='pending' AND created_at < clock_timestamp()-make_interval(secs => CASE WHEN fingerprint LIKE 'resolve:%' THEN $3::integer ELSE 390 END)`
+
 const interruptedChatReply = "Planning was interrupted. No checks were run. Review your saved request and try again."
 
 func (s *Store) ListChat(ctx context.Context, projectID string, before int64) (ChatPage, error) {
@@ -99,7 +115,7 @@ func (s *Store) ListTaskChat(ctx context.Context, projectID, taskID string, befo
 	if _, err := s.GetProject(ctx, projectID); err != nil {
 		return ChatPage{}, err
 	}
-	if _, err := s.db.Exec(ctx, `UPDATE chat_turns SET status='error',reply=$2,failure='{"code":"interrupted","retryable":true}'::jsonb WHERE project_id=$1 AND status='pending' AND created_at < clock_timestamp()-interval '390 seconds'`, projectID, interruptedChatReply); err != nil {
+	if _, err := s.db.Exec(ctx, expirePendingChatSQL, projectID, interruptedChatReply, int(SetupResolutionTimeout.Seconds())+30); err != nil {
 		return ChatPage{}, err
 	}
 	rows, err := s.db.Query(ctx, `SELECT `+chatColumns+` FROM chat_turns WHERE project_id=$1 AND ($2::bigint=0 OR sequence<$2) AND ($3='' OR task_id=$3) ORDER BY sequence DESC LIMIT 21`, projectID, before, taskID)
@@ -165,7 +181,7 @@ func (s *Store) BeginTaskChat(ctx context.Context, projectID, taskID, id, prompt
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return ChatTurn{}, false, err
 	}
-	if _, err := tx.Exec(ctx, `UPDATE chat_turns SET status='error',reply=$2,failure='{"code":"interrupted","retryable":true}'::jsonb WHERE project_id=$1 AND status='pending' AND created_at < clock_timestamp()-interval '390 seconds'`, projectID, interruptedChatReply); err != nil {
+	if _, err := tx.Exec(ctx, expirePendingChatSQL, projectID, interruptedChatReply, int(SetupResolutionTimeout.Seconds())+30); err != nil {
 		return ChatTurn{}, false, err
 	}
 	var busy bool

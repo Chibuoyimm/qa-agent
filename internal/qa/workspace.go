@@ -310,6 +310,19 @@ type TaskApprovalInput struct {
 }
 
 func (s *Store) ApproveTask(ctx context.Context, projectID, taskID string, in TaskApprovalInput) (TaskApproval, error) {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return TaskApproval{}, err
+	}
+	defer tx.Rollback(ctx)
+	approval, err := s.approveTaskTx(ctx, tx, projectID, taskID, in)
+	if err != nil {
+		return TaskApproval{}, err
+	}
+	return approval, tx.Commit(ctx)
+}
+
+func (s *Store) approveTaskTx(ctx context.Context, tx pgx.Tx, projectID, taskID string, in TaskApprovalInput) (TaskApproval, error) {
 	if len(in.Drafts) == 0 || len(in.Drafts) > 50 {
 		return TaskApproval{}, fmt.Errorf("%w: review 1–50 checks", ErrInvalid)
 	}
@@ -333,11 +346,6 @@ func (s *Store) ApproveTask(ctx context.Context, projectID, taskID string, in Ta
 	}
 	sum := sha256.Sum256(raw)
 	fingerprint := hex.EncodeToString(sum[:])
-	tx, err := s.db.Begin(ctx)
-	if err != nil {
-		return TaskApproval{}, err
-	}
-	defer tx.Rollback(ctx)
 	task, err := scanTask(tx.QueryRow(ctx, `SELECT `+taskColumns+` FROM testing_tasks WHERE id=$1 AND project_id=$2 FOR UPDATE`, taskID, projectID))
 	if err != nil {
 		return TaskApproval{}, err
@@ -410,9 +418,6 @@ func (s *Store) ApproveTask(ctx context.Context, projectID, taskID string, in Ta
 		return TaskApproval{}, err
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO task_approvals(task_id,turn_id,input_sha256,scenario_ids,base_url,draft_indices) VALUES($1,$2,$3,$4,$5,$6)`, taskID, in.TurnID, fingerprint, idsRaw, checkedTarget.BaseURL, indices); err != nil {
-		return TaskApproval{}, err
-	}
-	if err := tx.Commit(ctx); err != nil {
 		return TaskApproval{}, err
 	}
 	return approval, nil

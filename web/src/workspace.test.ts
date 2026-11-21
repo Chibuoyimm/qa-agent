@@ -92,3 +92,10 @@ test('runs explicitly named saved journeys without taking over ordinary test req
   for (const text of ['test the whole app end to end', 'run all approved checks', 'what happened on the offer journey?', 'run the offer journey and change its steps', 'save the offer journey'])
     assert.equal(runJourneyReference(text), null)
 })
+
+test('setup and run distinguishes a named journey, a follow-up answer and a plain planning request', async () => {
+  const {setupRunReference} = await import('./api.ts')
+  assert.equal(setupRunReference('Figure out the missing setup from the repos, use what’s available, and run the offer acceptance journey.'), 'offer acceptance')
+  assert.equal(setupRunReference('Resolve setup and run this journey. Additional detail: use the staging site'), '')
+  for (const prompt of ['Plan the setup for checkout', 'Run the offer acceptance journey', 'Can it resolve setup and run this journey?', 'Resolve setup but don’t run the journey', 'Resolve setup for a dry run of this journey']) assert.equal(setupRunReference(prompt), null)
+})
