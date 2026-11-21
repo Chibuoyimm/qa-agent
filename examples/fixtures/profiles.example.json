@@ -9,5 +9,38 @@
     "cleanup": ["/absolute/path/to/escrow/.venv/bin/python", "/absolute/path/to/qa-agent/examples/fixtures/escrow.py", "cleanup"],
     "environment": ["QA_FIXTURE_ESCROW_DATABASE_URL", "QA_FIXTURE_ESCROW_REPO"],
     "timeout_ms": 30000
+  },
+  {
+    "id": "escrow_offers",
+    "name": "Escrow offer acceptance",
+    "description": "Three verified synthetic customers for a USD-to-NGN request and competing offers. The worker removes this run’s records afterward.",
+    "origins": [
+      "http://127.0.0.1:3000"
+    ],
+    "secret_refs": [
+      "QA_TEST_REQUESTER_EMAIL",
+      "QA_TEST_REQUESTER_PASSWORD",
+      "QA_TEST_COUNTERPARTY_EMAIL",
+      "QA_TEST_COUNTERPARTY_PASSWORD",
+      "QA_TEST_COMPETITOR_EMAIL",
+      "QA_TEST_COMPETITOR_PASSWORD"
+    ],
+    "prepare": [
+      "/absolute/path/to/escrow/.venv/bin/python",
+      "/absolute/path/to/qa-agent/examples/fixtures/escrow.py",
+      "prepare",
+      "offers"
+    ],
+    "cleanup": [
+      "/absolute/path/to/escrow/.venv/bin/python",
+      "/absolute/path/to/qa-agent/examples/fixtures/escrow.py",
+      "cleanup",
+      "offers"
+    ],
+    "environment": [
+      "QA_FIXTURE_ESCROW_DATABASE_URL",
+      "QA_FIXTURE_ESCROW_REPO"
+    ],
+    "timeout_ms": 30000
   }
 ]

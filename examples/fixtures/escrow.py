@@ -16,7 +16,7 @@ import sys
 from urllib.parse import urlparse
 
 
-def configuration() -> tuple[str, str, list[str]]:
+def configuration(offer_acceptance: bool) -> tuple[str, str, dict[str, str]]:
     run_id = os.environ["QA_RUN_ID"]
     if not re.fullmatch(r"[a-f0-9]{32}", run_id):
         raise ValueError("Expected a QA run identifier")
@@ -24,17 +24,19 @@ def configuration() -> tuple[str, str, list[str]]:
     url = urlparse(database)
     if url.hostname != "127.0.0.1" or url.port != 55442 or url.path != "/escrow_qa_journey":
         raise ValueError("This example only permits the dedicated local journey database")
-    emails = [f"qa-{role}-{run_id}@example.com" for role in ("requester", "counterparty")]
-    return run_id, database, emails
+    roles = ("requester", "counterparty", "competitor") if offer_acceptance else ("requester", "counterparty")
+    participants = {role.upper(): f"qa-{role}-{run_id}@example.com" for role in roles}
+    return run_id, database, participants
 
 
-async def prepare() -> None:
-    run_id, database, emails = configuration()
+async def prepare(offer_acceptance: bool) -> None:
+    run_id, database, participants = configuration(offer_acceptance)
     repo = Path(os.environ["QA_FIXTURE_ESCROW_REPO"]).resolve()
     if not (repo / "app/services/auth.py").is_file():
         raise ValueError("Escrow source is unavailable")
     sys.path.insert(0, str(repo))
     os.environ.update(APP_DATABASE_URL=database.replace("postgresql://", "postgresql+asyncpg://"), APP_NOTIFICATION_PROVIDER="logging", APP_KYC_PROVIDER="local")
+    from app.domain.enums import KycStatus
     from app.services.auth import AuthService
     from app.infrastructure.database.session import AsyncSessionFactory
     from app.models.user import UserModel
@@ -42,20 +44,25 @@ async def prepare() -> None:
     from sqlalchemy import update
 
     env: dict[str, str] = {}
-    for index, role in enumerate(("REQUESTER", "COUNTERPARTY")):
+    for index, (role, email) in enumerate(participants.items()):
         password = secrets.token_urlsafe(24) + "A1!"
-        user = await AuthService().register_user(email=emails[index], password=password, country="NG", phone=None)
+        user = await AuthService().register_user(email=email, password=password, country="NG", phone=None)
         async with AsyncSessionFactory() as session:
-            await session.execute(update(UserModel).where(UserModel.id == user.id).values(email_verified_at=utc_now()))
+            verified = {"email_verified_at": utc_now()}
+            if offer_acceptance:
+                verified["kyc_status"] = KycStatus.VERIFIED
+            await session.execute(update(UserModel).where(UserModel.id == user.id).values(**verified))
             await session.commit()
-        identifier = str(int(hashlib.sha256((run_id + role).encode()).hexdigest()[:12], 16) % 10**10).zfill(10) + str(index + 1)
-        env.update({f"QA_TEST_{role}_EMAIL": emails[index], f"QA_TEST_{role}_PASSWORD": password, f"QA_TEST_{role}_ID": identifier})
+        env.update({f"QA_TEST_{role}_EMAIL": email, f"QA_TEST_{role}_PASSWORD": password})
+        if not offer_acceptance:
+            env[f"QA_TEST_{role}_ID"] = str(int(hashlib.sha256((run_id + role).encode()).hexdigest()[:12], 16) % 10**10).zfill(10) + str(index + 1)
     # This is private protocol output, consumed only by the worker and never logged.
     print(json.dumps({"env": env}))
 
 
-async def cleanup() -> None:
-    _, database, emails = configuration()
+async def cleanup(offer_acceptance: bool) -> None:
+    _, database, participants = configuration(offer_acceptance)
+    emails = list(participants.values())
     import asyncpg
 
     connection = await asyncpg.connect(database)
@@ -84,9 +91,8 @@ async def cleanup() -> None:
 
 
 if __name__ == "__main__":
-    if sys.argv[1:] == ["prepare"]:
-        asyncio.run(prepare())
-    elif sys.argv[1:] == ["cleanup"]:
-        asyncio.run(cleanup())
-    else:
-        raise SystemExit("Use prepare or cleanup")
+    args = sys.argv[1:]
+    if args not in (["prepare"], ["cleanup"], ["prepare", "offers"], ["cleanup", "offers"]):
+        raise SystemExit("Use prepare or cleanup, optionally followed by offers")
+    command = prepare if args[0] == "prepare" else cleanup
+    asyncio.run(command(offer_acceptance=args[1:] == ["offers"]))
