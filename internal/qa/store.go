@@ -190,53 +190,65 @@ func validateRunInput(in RunInput) error {
 }
 
 func createRunTx(ctx context.Context, tx pgx.Tx, id, projectID, baseURL string, in RunInput) (Run, error) {
-	rows, err := tx.Query(ctx, `SELECT id,project_id,name,description,expected_outcome,approved,steps,created_at,COALESCE(journey_id,''),COALESCE(task_id,'')
-		FROM scenarios WHERE project_id=$1 AND id=ANY($2)`, projectID, in.ScenarioIDs)
+	scenarios, err := approvedRunScenarios(ctx, tx, projectID, in.ScenarioIDs)
 	if err != nil {
 		return Run{}, err
 	}
-	byID := make(map[string]Scenario, len(in.ScenarioIDs))
+	return insertRunSnapshot(ctx, tx, id, projectID, baseURL, in.Mode, "", scenarios)
+}
+
+func approvedRunScenarios(ctx context.Context, tx pgx.Tx, projectID string, ids []string) ([]Scenario, error) {
+	rows, err := tx.Query(ctx, `SELECT id,project_id,name,description,expected_outcome,approved,steps,created_at,COALESCE(journey_id,''),COALESCE(task_id,'')
+		FROM scenarios WHERE project_id=$1 AND id=ANY($2) FOR SHARE`, projectID, ids)
+	if err != nil {
+		return nil, err
+	}
+	byID := make(map[string]Scenario, len(ids))
 	for rows.Next() {
 		var sc Scenario
 		var raw []byte
 		if err := rows.Scan(&sc.ID, &sc.ProjectID, &sc.Name, &sc.Description, &sc.ExpectedOutcome, &sc.Approved, &raw, &sc.CreatedAt, &sc.JourneyID, &sc.TaskID); err != nil {
 			rows.Close()
-			return Run{}, err
+			return nil, err
 		}
 		if err := json.Unmarshal(raw, &sc.Steps); err != nil {
 			rows.Close()
-			return Run{}, err
+			return nil, err
 		}
 		byID[sc.ID] = sc
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
-		return Run{}, err
+		return nil, err
 	}
 	rows.Close()
-	if len(byID) != len(in.ScenarioIDs) {
-		return Run{}, fmt.Errorf("%w: a selected scenario is not in this project", ErrInvalid)
+	if len(byID) != len(ids) {
+		return nil, fmt.Errorf("%w: a selected scenario is not in this project", ErrInvalid)
 	}
-	scenarios := make([]Scenario, 0, len(in.ScenarioIDs))
-	for _, id := range in.ScenarioIDs {
+	scenarios := make([]Scenario, 0, len(ids))
+	for _, id := range ids {
 		sc := byID[id]
 		if !sc.Approved {
-			return Run{}, fmt.Errorf("%w: all selected scenarios must be approved", ErrConflict)
+			return nil, fmt.Errorf("%w: all selected scenarios must be approved", ErrConflict)
 		}
 		scenarios = append(scenarios, sc)
 	}
+	return scenarios, nil
+}
+
+func insertRunSnapshot(ctx context.Context, tx pgx.Tx, id, projectID, baseURL, mode, task string, scenarios []Scenario) (Run, error) {
 	snapshot, err := json.Marshal(scenarios)
 	if err != nil {
 		return Run{}, err
 	}
 	var created time.Time
-	err = tx.QueryRow(ctx, `INSERT INTO runs(id,project_id,base_url,mode,status,gate,scenarios,results)
-		VALUES($1,$2,$3,$4,'queued','pending',$5,'[]'::jsonb) RETURNING created_at`,
-		id, projectID, baseURL, in.Mode, snapshot).Scan(&created)
+	err = tx.QueryRow(ctx, `INSERT INTO runs(id,project_id,base_url,mode,status,gate,scenarios,results,task_id)
+		VALUES($1,$2,$3,$4,'queued','pending',$5,'[]'::jsonb,NULLIF($6,'')) RETURNING created_at`,
+		id, projectID, baseURL, mode, snapshot, task).Scan(&created)
 	if err != nil {
 		return Run{}, err
 	}
-	return Run{ID: id, ProjectID: projectID, BaseURL: baseURL, Mode: in.Mode, Status: "queued", Gate: "pending", Scenarios: scenarios, Results: []ScenarioResult{}, CreatedAt: created}, nil
+	return Run{ID: id, ProjectID: projectID, TaskID: task, BaseURL: baseURL, Mode: mode, Status: "queued", Gate: "pending", Scenarios: scenarios, Results: []ScenarioResult{}, CreatedAt: created}, nil
 }
 
 func (s *Store) expireLeases(ctx context.Context) error {

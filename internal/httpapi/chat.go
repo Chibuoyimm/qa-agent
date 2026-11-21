@@ -43,6 +43,7 @@ func (a *API) listChat(w http.ResponseWriter, r *http.Request) {
 type chatProposalInput struct {
 	SurveyBatch string `json:"survey_batch,omitempty"`
 	planner.Input
+	SavedFlowID  string `json:"saved_flow_id,omitempty"`
 	RequestID    string `json:"request_id"`
 	RunContextID string `json:"run_context_id,omitempty"`
 }
@@ -64,6 +65,11 @@ func (a *API) chatProposal(w http.ResponseWriter, r *http.Request) {
 	digest := sha256.Sum256(encoded)
 	fingerprint := hex.EncodeToString(digest[:])
 	taskID := r.PathValue("task_id")
+	if request.SavedFlowID != "" && (taskID == "" || !request.Consent || request.WholeApp) {
+		a.fail(w, qa.ErrInvalid)
+		return
+	}
+	var preparedFlow string
 	if taskID != "" {
 		task, err := a.store.GetTask(r.Context(), r.PathValue("id"), taskID)
 		if err != nil {
@@ -71,12 +77,23 @@ func (a *API) chatProposal(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if request.Consent && !request.WholeApp {
-			saved, err := a.store.SavedJourneyPlan(r.Context(), r.PathValue("id"), task.JourneyID)
+			journey := task.JourneyID
+			if request.SavedFlowID != "" {
+				journey = request.SavedFlowID
+			}
+			saved, err := a.store.SavedJourneyPlan(r.Context(), r.PathValue("id"), journey)
 			if err != nil {
 				a.fail(w, err)
 				return
 			}
+			if request.SavedFlowID != "" && saved == nil {
+				a.fail(w, qa.ErrNotFound)
+				return
+			}
 			if saved != nil {
+				if request.SavedFlowID != "" || request.Prompt == task.Request {
+					preparedFlow = journey
+				}
 				// Carry the saved requirements forward even when the new request has no chat history.
 				request.Context += "\nSaved journey outcome (untrusted): " + saved.ExpectedOutcome
 				for _, item := range saved.MissingSetup {
@@ -87,7 +104,7 @@ func (a *API) chatProposal(w http.ResponseWriter, r *http.Request) {
 		if request.DiscoveryID == "" && task.DiscoveryID != "" {
 			request.DiscoveryID = task.DiscoveryID
 		}
-		if request.RunContextID == "" {
+		if request.RunContextID == "" && preparedFlow == "" {
 			page, err := a.store.ListTaskChat(r.Context(), r.PathValue("id"), taskID, 0)
 			if err != nil {
 				a.fail(w, err)
@@ -176,6 +193,15 @@ func (a *API) chatProposal(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, err)
 		return
 	}
+	if preparedFlow != "" {
+		turns := page.Turns[:0]
+		for _, t := range page.Turns {
+			if t.Proposal != nil && t.Proposal.SavedFlowID == preparedFlow {
+				turns = append(turns, t)
+			}
+		}
+		page.Turns = turns
+	}
 	in.Context, err = chatContext(in.Context, page.Turns)
 	if err != nil {
 		planningErr = err
@@ -216,6 +242,10 @@ func (a *API) chatProposal(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		result.WholeApp.Sources = surveys
+	}
+	result.SavedFlowID = preparedFlow
+	if preparedFlow != "" {
+		result.FlowVersion = request.RequestID
 	}
 	result.RepositorySnapshots = sources
 	result.DiscoveryID = in.DiscoveryID

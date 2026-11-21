@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { requestsWholeApp, coverageGroups, runCounts, requiresPlanRevision, scenarioInput, journeyStages } from './workspace.ts'
-import { saveJourneyReference } from './api.ts'
+import { runJourneyReference, saveJourneyReference } from './api.ts'
 import type { CoverageData, Run, Scenario, Step } from './api.ts'
 const scenario = (id: string, journey_id = ''): Scenario => ({ id, journey_id, project_id: 'app', name: id, description: '', expected_outcome: 'Independent expected outcome', approved: true, steps: [], created_at: '' })
 test('coverage includes untested journeys, drafts without runs, and older ungrouped checks', () => {
@@ -84,4 +84,11 @@ test('saving a named journey is a local plan command', () => {
   assert.equal(saveJourneyReference('track sign-in as a separate journey'), 'sign-in')
   assert.equal(saveJourneyReference('save this journey'), '')
   assert.equal(saveJourneyReference('test the save button in the offer journey'), null)
+})
+
+test('runs explicitly named saved journeys without taking over ordinary test requests', () => {
+  assert.equal(runJourneyReference('run the offer acceptance journey'), 'offer acceptance')
+  assert.equal(runJourneyReference('Please rerun the saved flow “Track delivery”.'), 'Track delivery')
+  for (const text of ['test the whole app end to end', 'run all approved checks', 'what happened on the offer journey?', 'run the offer journey and change its steps', 'save the offer journey'])
+    assert.equal(runJourneyReference(text), null)
 })

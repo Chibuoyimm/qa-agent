@@ -220,6 +220,7 @@ export type SetupJourney = {
   source_refs: string[]
 }
 export type AiProposalResponse = {
+  saved_flow_id?: string
   whole_app?: {sources: SourceSurvey[]; coverage: string[][]; needs_setup?: SetupJourney[] | null}
   provider: AiProvider
   model: string
@@ -388,6 +389,7 @@ export function validateScenario(input: unknown): ScenarioInput {
 }
 
 export type ChatTurn = {
+  journey_setup?: string[]
   saved_journey_id?: string
   task_id?: string
   id: string
@@ -414,7 +416,14 @@ export function chatRunCommand(prompt: string): ChatRunAction | null {
 
 export type JourneyPlan = {task_id: string; turn_id: string; item: string; expected_outcome: string; missing_setup?: string[]; steps?: Step[]; source_refs?: string[]}
 export type JourneyChoice = {item: string; name: string}
-export type SaveJourneyResult = {turn: ChatTurn} | {plan_turn_id: string; choices: JourneyChoice[]}
+export type SaveJourneyResult = {turn: ChatTurn} | {plan_turn_id?: string; choices: JourneyChoice[]}
+
+export function runJourneyReference(prompt: string): string | null {
+  const command = prompt.trim().replace(/[.!?]+$/, '').match(/^(?:please\s+)?(?:run|rerun)\s+(?:(?:the|my)\s+)?(?:saved\s+)?(.+)$/i)
+  if (!command) return null
+  const match = command[1].match(/^(.+?)\s+(?:journey|flow|workflow)$/i) ?? command[1].match(/^(?:journey|flow|workflow)[ :]+(.+)$/i)
+  return match ? match[1].replace(/^[“"']|[”"']$/g, '').trim() || null : null
+}
 
 export function saveJourneyReference(prompt: string): string | null {
   const command = prompt.trim().replace(/[.!?]+$/, '').match(/^(?:please\s+)?(?:save|track)\s+(.+)$/i)
@@ -427,7 +436,7 @@ export function saveJourneyReference(prompt: string): string | null {
 export type Journey = { saved_plan?: JourneyPlan; id: string; project_id: string; name: string; created_at: string }
 export type TaskApproval = { turn_id: string; scenario_ids: string[] }
 export type TestingTask = { id: string; project_id: string; journey_id: string; title: string; request: string; discovery_id?: string; created_at: string; approvals: TaskApproval[] }
-export type CoverageCheck = { run_status?: RunStatus; last_verified?: {run_id: string; base_url: string; finished_at: string; status: "passed" | "failed"}; scenario: Scenario; result: ScenarioResult; run_id: string; base_url: string; finished_at: string }
+export type CoverageCheck = { saved_journey_ids?: string[]; run_status?: RunStatus; last_verified?: {run_id: string; base_url: string; finished_at: string; status: "passed" | "failed"}; scenario: Scenario; result: ScenarioResult; run_id: string; base_url: string; finished_at: string }
 export type CoverageData = { targets?: string[]; journeys: Journey[]; checks: CoverageCheck[]; scenarios: Scenario[] }
 export type FindingReview = { scenario_id: string; status: string; owner: string; reason: string; updated_at?: string }
 export const newRequestID = () => crypto.randomUUID().replaceAll('-', '')

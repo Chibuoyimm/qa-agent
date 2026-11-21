@@ -64,6 +64,7 @@ func (a *API) Handler() http.Handler {
 	mux.Handle("POST /api/projects/{id}/tasks", a.authorize(a.apiToken, a.createTask))
 	mux.Handle("GET /api/projects/{id}/tasks/{task_id}", a.authorize(a.apiToken, a.getTask))
 	mux.Handle("POST /api/projects/{id}/tasks/{task_id}/discovery", a.authorize(a.apiToken, a.discoverTask))
+	mux.Handle("POST /api/projects/{id}/tasks/{task_id}/run-journey", a.authorize(a.apiToken, a.runSavedJourney))
 	mux.Handle("POST /api/projects/{id}/tasks/{task_id}/save-journey", a.authorize(a.apiToken, a.savePlanJourney))
 	mux.Handle("POST /api/projects/{id}/tasks/{task_id}/approve", a.authorize(a.apiToken, a.approveTask))
 	mux.Handle("GET /api/projects/{id}/tasks/{task_id}/chat", a.authorize(a.apiToken, a.listChat))

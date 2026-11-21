@@ -7,7 +7,7 @@ export function runCounts(run: Run) {
   for (const result of run.results) if(result.status!=='running') counts[result.status]++
   return counts
 }
-// Each check appears once, using the latest recorded attempt supplied by the API.
+// One check can also be evidence for a separately saved journey.
 export function coverageGroups(data: CoverageData) {
   const latest = new Map(data.checks.map(check => [check.scenario.id, check]))
   const scenarios = new Map(data.scenarios.map(s => [s.id, s]))
@@ -15,6 +15,12 @@ export function coverageGroups(data: CoverageData) {
   const groups = data.journeys.map(journey => ({ ...journey, scenarios: [] as Scenario[] }))
   const ungrouped = { id: '', name: 'Checks to organize', project_id: '', created_at: '', scenarios: [] as Scenario[] }
   for (const scenario of scenarios.values()) (groups.find(group => group.id === scenario.journey_id) ?? ungrouped).scenarios.push(scenario)
+  for (const check of data.checks) {
+    for (const id of check.saved_journey_ids ?? []) {
+      const group = groups.find(item => item.id === id)
+      if (group && !group.scenarios.some(item => item.id === check.scenario.id)) group.scenarios.push(check.scenario)
+    }
+  }
   if (ungrouped.scenarios.length) groups.push(ungrouped)
   return groups.map(group => {
     const checks = group.scenarios.map(scenario => ({ scenario, latest: latest.get(scenario.id) }))

@@ -33,7 +33,14 @@ export default function TaskWorkspace({ token, project, taskId, draftKey, journe
   const [tasks, setTasks] = useState<TestingTask[]>([])
   const [task, setTask] = useState<TestingTask | null>(null)
   const [turns, setTurns] = useState<ChatTurn[]>([])
-  const [saveChoices, setSaveChoices] = useState<{task: string; prompt: string; reference: string; requestID: string; turn: string; items: JourneyChoice[]} | null>(null)
+  const [preparing, setPreparing] = useState<{task:string; id:string; name:string} | null>(null)
+  const activeFlow = preparing?.task === taskId ? preparing : null
+  const journeyRetry = useRef<{key:string; id:string} | null>(null)
+  const [journeyChoices, setJourneyChoices] = useState<{task: string; prompt: string; reference: string; requestID: string; action:'save'|'run'; turn?: string; items: JourneyChoice[]} | null>(null)
+  const [journeyReply, setJourneyReply] = useState('')
+  useEffect(() => {
+    if (journeyReply) document.getElementById(`journey-reply-${journeyReply}`)?.focus()
+  }, [journeyReply])
   const [hasOlder, setHasOlder] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
   const historyPanel = useRef<HTMLElement>(null)
@@ -73,7 +80,7 @@ export default function TaskWorkspace({ token, project, taskId, draftKey, journe
     return () => abort.abort()
   }, [root, token, revision])
   useEffect(() => {
-    setSaveChoices(null); setError(''); setTurns([]); setTask(null); setHasOlder(false)
+    setJourneyChoices(previous => previous?.task === taskId ? previous : null); setError(''); setTurns([]); setTask(null); setHasOlder(false)
     if (!taskId) { setLoading(false); return }
     const abort = new AbortController()
     let timer: ReturnType<typeof setTimeout>
@@ -111,6 +118,7 @@ export default function TaskWorkspace({ token, project, taskId, draftKey, journe
     try {
       id = await ensureTask(prompt, options.signal ?? undefined)
       const input = JSON.parse(String(options.body)) as Record<string, unknown>
+      if (activeFlow) input.saved_flow_id = activeFlow.id
       if (explore && !input.whole_app && !input.fixture_id && !input.discovery_id) {
         setProgress('Exploring up to 3 pages to find paths and controls…')
         let discovery = await api<Discovery>(token, `${root}/tasks/${id}/discovery`, { method: 'POST', signal: options.signal, body: JSON.stringify({ start_path: '/', max_pages: 3, ...(setup ? { setup_scenario_id: setup } : {}) }) })
@@ -155,7 +163,8 @@ export default function TaskWorkspace({ token, project, taskId, draftKey, journe
         input.survey_batch = batch
       }
       setProgress(input.whole_app ? 'Combining repository journeys into one plan…' : 'Reading the context and preparing checks…')
-      await api<ChatTurn>(token, `${root}/tasks/${id}/chat`, { ...options, body: JSON.stringify({ ...input, request_id: newRequestID(), ...(initialRunContext ? { run_context_id: initialRunContext } : {}) }) })
+      const response = await api<ChatTurn>(token, `${root}/tasks/${id}/chat`, { ...options, body: JSON.stringify({ ...input, request_id: newRequestID(), ...(initialRunContext ? { run_context_id: initialRunContext } : {}) }) })
+      if (activeFlow && response.proposal?.scenarios.length) setPreparing(null)
       if (batchKey) { try { sessionStorage.removeItem(batchKey) } catch { /* Optional resume cache. */ } }
       if (initialRunContext) onContextUsed()
     } finally { setProgress(''); if (id && alive.current) await refresh(id).catch(err => setError(errorText(err))) }
@@ -173,24 +182,34 @@ export default function TaskWorkspace({ token, project, taskId, draftKey, journe
       onChanged()
     } finally { setProgress(''); if (id && alive.current) await refresh(id).catch(err => setError(errorText(err))) }
   }
-  async function saveJourney(prompt: string, reference: string, signal?: AbortSignal, choice?: {turn: string; item: string; requestID: string}) {
-    const id = currentTask.current
-    if (!id) throw new Error('Open the plan conversation to save a journey.')
-    const requestID = choice?.requestID ?? newRequestID()
-    setProgress('Saving journey…')
+  async function journeyCommand(action:'save'|'run', prompt:string, reference:string, signal?:AbortSignal, choice?:{turn?:string; item:string; requestID:string}) {
+    setProgress(action === 'run' ? 'Checking saved journey…' : 'Saving journey…')
     setError('')
     try {
-      const result = await api<SaveJourneyResult>(token, `${root}/tasks/${id}/save-journey`, {method: 'POST', signal,
-        body: JSON.stringify({request_id: requestID, prompt, reference, turn_id: choice?.turn, item: choice?.item})})
+      const id = currentTask.current || await ensureTask(prompt, signal)
+      const key = JSON.stringify([id, action, prompt, mode, choice?.item])
+      const requestID = choice?.requestID ?? (journeyRetry.current?.key === key ? journeyRetry.current.id : newRequestID())
+      journeyRetry.current = {key, id:requestID}
+      const selection = action === 'save' ? {turn_id:choice?.turn, item:choice?.item} : {journey_id:choice?.item, mode}
+      const result = await api<SaveJourneyResult>(token, `${root}/tasks/${id}/${action}-journey`, {method:'POST', signal,
+        body:JSON.stringify({request_id:requestID, prompt, reference, ...selection})})
       if (currentTask.current !== id) return
       if ('choices' in result) {
-        setSaveChoices({task:id, prompt, reference, requestID, turn:result.plan_turn_id, items:result.choices})
+        setJourneyChoices({task:id, action, prompt, reference, requestID, turn:result.plan_turn_id, items:result.choices})
       } else {
-        setSaveChoices(null)
+        setJourneyChoices(null)
+        setPreparing(null)
         setTurns(previous => [...previous.filter(turn => turn.id !== result.turn.id), result.turn])
+        setJourneyReply(result.turn.id)
         onChanged()
       }
+      journeyRetry.current = null
     } finally { setProgress('') }
+  }
+  function prepareFlow(id:string, text?:string) {
+    const name = journeys.find(item => item.id === id)?.name ?? 'saved journey'
+    setPreparing({task:taskId, id, name})
+    setPrefill({text:text ?? `Prepare the ${name} journey. Here are the setup details: `, id:Date.now()})
   }
   async function older() {
     if (!taskId || !turns.length) return
@@ -208,27 +227,28 @@ export default function TaskWorkspace({ token, project, taskId, draftKey, journe
     </header>
     <div className="testing-main">
     {error && <div className="error-banner" role="alert">{error}</div>}{loading && <p role="status">Loading saved conversation…</p>}
-    <div className="chat-thread">{hasOlder && <button className="link-button" onClick={() => void older()}>Load earlier messages</button>}{turns.map(turn => <article className="chat-exchange" key={turn.id}><div className="chat-user-message"><small>You · {formatDate(turn.created_at)}</small>{turn.proposal?.scenarios.length && turn.prompt.length > 450 ? <details className="request-preview"><summary>{turn.prompt.slice(0,150).replace(/\s+\S*$/, '')}… <span>Read full request</span></summary><p>{turn.prompt}</p></details> : <p>{turn.prompt}</p>}</div><div className="chat-agent-message"><div className="chat-agent-label"><Sparkles size={17} /><strong>QA Agent</strong>{turn.proposal && <small>{turn.proposal.model}</small>}</div>{turn.status === 'error' ? <PlanningRecovery turn={turn} disabled={busy} onRetry={text => setPrefill({text, id: Date.now()})} onSettings={onAISettings} /> : <p>{turn.status === 'pending' ? 'Preparing your test plan…' : turn.reply}</p>}{turn.saved_journey_id && <a className="link-button" href={`#/coverage?project=${project.id}&journey=${turn.saved_journey_id}`}>View saved journey in Coverage</a>}{turn.proposal && <><WholeAppReview proposal={turn.proposal} turnId={turn.id}/>{turn.proposal.questions.length > 0 && <div className="chat-questions"><strong>A few details before we test</strong><ol>{turn.proposal.questions.map((question, i) => <li key={i}>{question}</li>)}</ol></div>}{turn.proposal.assumptions.length > 0 && <details className="chat-assumptions"><summary>Assumptions to review ({turn.proposal.assumptions.length})</summary><ul>{turn.proposal.assumptions.map((item, i) => <li key={i}>{item}</li>)}</ul></details>}{task && <ReviewPlan defaultMode={mode} token={token} project={project} task={task} turn={turn} scenarios={scenarios} busy={busy} onApproved={() => refresh(task.id)} onRevise={text => setPrefill({text, id: Date.now()})} onRun={(ids, requestID, settings) => launch('Run the reviewed plan', 'selected', undefined, ids, requestID, settings)} />}<SetupJourneys proposal={turn.proposal} turnId={turn.id}/>{(turn.proposal.discovery_id || turn.proposal.repository_snapshots?.length) ? <details className="chat-assumptions"><summary>Context used for this plan</summary>{turn.proposal.discovery_id && <p>Observed app pages from discovery {turn.proposal.discovery_id.slice(0, 8)}</p>}{turn.proposal.repository_snapshots?.map(source => <p key={source.id}>{source.repository} · {source.role} · {source.commit_sha.slice(0, 12)}</p>)}</details> : null}</>}{turn.run_id && <RunCard token={token} id={turn.run_id} onOpen={onOpenRun} />}</div></article>)}</div>
+    <div className="chat-thread">{hasOlder && <button className="link-button" onClick={() => void older()}>Load earlier messages</button>}{turns.map(turn => <article className="chat-exchange" key={turn.id} id={`journey-reply-${turn.id}`} tabIndex={-1}><div className="chat-user-message"><small>You · {formatDate(turn.created_at)}</small>{turn.proposal?.scenarios.length && turn.prompt.length > 450 ? <details className="request-preview"><summary>{turn.prompt.slice(0,150).replace(/\s+\S*$/, '')}… <span>Read full request</span></summary><p>{turn.prompt}</p></details> : <p>{turn.prompt}</p>}</div><div className="chat-agent-message"><div className="chat-agent-label"><Sparkles size={17} /><strong>QA Agent</strong>{turn.proposal && <small>{turn.proposal.model}</small>}</div>{turn.status === 'error' ? <PlanningRecovery turn={turn} disabled={busy} onRetry={text => setPrefill({text, id: Date.now()})} onSettings={onAISettings} /> : <p>{turn.status === 'pending' ? 'Preparing your test plan…' : turn.reply}</p>}{turn.journey_setup && <section aria-label="Required setup"><ul>{turn.journey_setup.map(item => <li key={item}>{item}</li>)}</ul><button type="button" className="link-button" disabled={busy} onClick={() => prepareFlow(turn.saved_journey_id!)}>Add setup details</button></section>}{turn.saved_journey_id && <a className="link-button" href={`#/coverage?project=${project.id}&journey=${turn.saved_journey_id}`}>View saved journey in Coverage</a>}{turn.proposal && <><WholeAppReview proposal={turn.proposal} turnId={turn.id}/>{turn.proposal.questions.length > 0 && <div className="chat-questions"><strong>A few details before we test</strong><ol>{turn.proposal.questions.map((question, i) => <li key={i}>{question}</li>)}</ol>{turn.proposal.saved_flow_id && <button className="link-button" onClick={() => prepareFlow(turn.proposal!.saved_flow_id!)}>Answer for this journey</button>}</div>}{turn.proposal.assumptions.length > 0 && <details className="chat-assumptions"><summary>Assumptions to review ({turn.proposal.assumptions.length})</summary><ul>{turn.proposal.assumptions.map((item, i) => <li key={i}>{item}</li>)}</ul></details>}{task && <ReviewPlan defaultMode={mode} token={token} project={project} task={task} turn={turn} scenarios={scenarios} busy={busy} onApproved={() => refresh(task.id)} onRevise={text => turn.proposal?.saved_flow_id ? prepareFlow(turn.proposal.saved_flow_id, text) : setPrefill({text, id: Date.now()})} onRun={(ids, requestID, settings) => launch('Run the reviewed plan', 'selected', undefined, ids, requestID, settings)} />}<SetupJourneys proposal={turn.proposal} turnId={turn.id}/>{(turn.proposal.discovery_id || turn.proposal.repository_snapshots?.length) ? <details className="chat-assumptions"><summary>Context used for this plan</summary>{turn.proposal.discovery_id && <p>Observed app pages from discovery {turn.proposal.discovery_id.slice(0, 8)}</p>}{turn.proposal.repository_snapshots?.map(source => <p key={source.id}>{source.repository} · {source.role} · {source.commit_sha.slice(0, 12)}</p>)}</details> : null}</>}{turn.run_id && <RunCard token={token} id={turn.run_id} onOpen={onOpenRun} />}</div></article>)}</div>
     {progress && <div className="flow-progress" role="status"><LoaderCircle className="spin" size={18} />{progress}</div>}
 
     {initialRunContext && <div className="flow-card">Attached run · {attachedRun ? `${attachedRun.scenarios[0]?.name || 'App checks'} · ${attachedRun.status} · ${attachedRun.base_url} · ${formatDate(attachedRun.created_at)}` : initialRunContext}<button className="link-button" onClick={onContextUsed}>Remove run context</button></div>}
-    {saveChoices && saveChoices.task === taskId && <form className="flow-card" key={saveChoices.requestID} onSubmit={event => {
+    {journeyChoices && journeyChoices.task === taskId && <form className="flow-card" key={journeyChoices.requestID} onSubmit={event => {
       event.preventDefault()
       const item = String(new FormData(event.currentTarget).get('journey'))
-      void saveJourney(saveChoices.prompt, saveChoices.reference, undefined, {turn:saveChoices.turn, item, requestID:saveChoices.requestID}).catch(err => setError(errorText(err)))
-    }}><label>Which journey did you mean by “{saveChoices.reference || 'this journey'}”?
-      <select name="journey" defaultValue="" required><option value="" disabled>Choose from the plan</option>
-        {saveChoices.items.map(item => <option key={item.item} value={item.item}>{item.name}</option>)}</select></label>
-      <button type="submit" className="button button-primary" disabled={busy}>Save selected journey</button>
-      <button type="button" className="link-button" onClick={() => setSaveChoices(null)}>Cancel</button>
+      void journeyCommand(journeyChoices.action, journeyChoices.prompt, journeyChoices.reference, undefined, {turn:journeyChoices.turn, item, requestID:journeyChoices.requestID}).catch(err => setError(errorText(err)))
+    }}><label>Which journey did you mean by “{journeyChoices.reference || 'this journey'}”?
+      <select name="journey" defaultValue="" required><option value="" disabled>{journeyChoices.action === 'run' ? 'Choose a saved journey' : 'Choose from the plan'}</option>
+        {journeyChoices.items.map(item => <option key={item.item} value={item.item}>{item.name}</option>)}</select></label>
+      <button type="submit" className="button button-primary" disabled={busy}>{journeyChoices.action === 'run' ? 'Run selected journey' : 'Save selected journey'}</button>
+      <button type="button" className="link-button" onClick={() => setJourneyChoices(null)}>Cancel</button>
     </form>}
+    {activeFlow && <div className="flow-row"><strong>Preparing {activeFlow.name}</strong><button className="link-button" onClick={() => setPreparing(null)}>Remove journey</button></div>}
     <AiProposals targetOrigin={project.base_url} token={token} projectId={project.id} configRevision={configRevision} onReady={onAIReady} onClose={() => {}} onReview={() => {}} conversation={{ prefill, disabled: busy || loading, draftKey, runContextId: initialRunContext, sourceToReview, initialPrompt: !taskId && selectedJourneyName ? `Test the ${selectedJourneyName}${/journey$/i.test(selectedJourneyName) ? '' : ' journey'}.` : !loading && task && turns.length === 0 ? task.request : undefined, onFindSource: (prompt,connect) => onFindSource(prompt || task?.request || '',connect), onSettings: onAISettings, onAccessSetup: accessVerified ? undefined : async text => {
       if (text.trim() && !taskId) {
         setProgress('Saving your request…')
         try {await ensureTask(text.trim())} finally {setProgress('')}
       }
       onSettings()
-    }, taskContext: true, send, saveJourney: taskId ? saveJourney : undefined, command: (prompt, action, signal) => launch(prompt, action, signal) }} />
+    }, taskContext: true, send, preparingJourney: activeFlow?.name, saveJourney: taskId ? (p,r,s) => journeyCommand('save',p,r,s) : undefined, runJourney: (p,r,s) => journeyCommand('run',p,r,s), command: (prompt, action, signal) => launch(prompt, action, signal) }} />
     <div className="flow-row workspace-footer"><p>Run the app’s existing checks with their approved expectations.</p><button className="link-button" disabled={busy || !scenarios.some(s => s.approved)} onClick={() => void launch('Run all approved checks', 'all_approved').catch(err => setError(errorText(err)))}>Run all approved checks ({scenarios.filter(s => s.approved).length}) <Play size={14} /></button></div>
     {!taskId && <details className="flow-card journey-options"><summary>Journey · {journeys.find(item => item.id === journey)?.name || journeyName || 'New journey'}</summary><div className="task-options"><label>Journey<select value={journey} onChange={event => setJourney(event.target.value)}><option value="">New journey</option>{journeys.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>{!journey && <label>Journey name <span className="muted">(optional)</span><input maxLength={200} placeholder="e.g. Checkout" value={journeyName} onChange={event => setJourneyName(event.target.value)} /></label>}</div></details>}
     <details className="flow-card exploration-options"><summary>App access & exploration</summary><label className="inline-check"><input type="checkbox" checked={explore} disabled={busy} onChange={event => setExplore(event.target.checked)} />Explore up to 3 app pages before planning</label><p>Discovery follows same-origin links. Its observations help find controls; your requirements establish the expected outcome.</p><label>Sign-in or access setup<select value={setup} disabled={busy} onChange={event => { setSetup(event.target.value) }}><option value="">No setup (public app)</option>{scenarios.filter(s => s.approved && !journeySummary(s.steps).phases.length && !journeySummary(s.steps).fixture).map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label><p>Your verified default is reused for new requests. <button className="link-button" onClick={onSettings}>Check access or change setup</button></p><label>Run mode<select value={mode} disabled={busy} onChange={event => setMode(event.target.value as typeof mode)}><option value="advisory">Advisory</option><option value="blocking">Blocking gate</option></select></label><p>Advisory reports outcomes. A blocking run returns a failed gate when a required check fails or cannot complete.</p></details>

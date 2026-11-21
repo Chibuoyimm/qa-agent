@@ -304,8 +304,9 @@ type ReviewedDraft struct {
 	ScenarioInput
 }
 type TaskApprovalInput struct {
-	TurnID string          `json:"turn_id"`
-	Drafts []ReviewedDraft `json:"drafts"`
+	BaseURL string          `json:"base_url,omitempty"`
+	TurnID  string          `json:"turn_id"`
+	Drafts  []ReviewedDraft `json:"drafts"`
 }
 
 func (s *Store) ApproveTask(ctx context.Context, projectID, taskID string, in TaskApprovalInput) (TaskApproval, error) {
@@ -365,6 +366,21 @@ func (s *Store) ApproveTask(ctx context.Context, projectID, taskID string, in Ta
 	if turn.Status != "completed" || turn.Proposal == nil {
 		return TaskApproval{}, ErrConflict
 	}
+	target := in.BaseURL
+	if target == "" {
+		if err := tx.QueryRow(ctx, "SELECT base_url FROM projects WHERE id=$1", projectID).Scan(&target); err != nil {
+			return TaskApproval{}, err
+		}
+	}
+	checkedTarget, err := ValidateProject(ProjectInput{Name: "Plan approval", BaseURL: target}, s.allowed)
+	if err != nil {
+		return TaskApproval{}, err
+	}
+	journeyID := task.JourneyID
+	if turn.Proposal.SavedFlowID != "" {
+		journeyID = turn.Proposal.SavedFlowID
+	}
+	indices := make([]int32, 0, len(in.Drafts))
 	approval := TaskApproval{TurnID: in.TurnID, ScenarioIDs: []string{}}
 	for _, draft := range in.Drafts {
 		if draft.Index >= len(turn.Proposal.Scenarios) {
@@ -382,17 +398,18 @@ func (s *Store) ApproveTask(ctx context.Context, projectID, taskID string, in Ta
 		if err != nil {
 			return TaskApproval{}, err
 		}
-		_, err = tx.Exec(ctx, `INSERT INTO scenarios(id,project_id,name,description,expected_outcome,approved,steps,journey_id,task_id) VALUES($1,$2,$3,$4,$5,true,$6,$7,$8)`, id, projectID, draft.Name, draft.Description, draft.ExpectedOutcome, steps, task.JourneyID, taskID)
+		_, err = tx.Exec(ctx, `INSERT INTO scenarios(id,project_id,name,description,expected_outcome,approved,steps,journey_id,task_id) VALUES($1,$2,$3,$4,$5,true,$6,$7,$8)`, id, projectID, draft.Name, draft.Description, draft.ExpectedOutcome, steps, journeyID, taskID)
 		if err != nil {
 			return TaskApproval{}, err
 		}
+		indices = append(indices, int32(draft.Index))
 		approval.ScenarioIDs = append(approval.ScenarioIDs, id)
 	}
 	idsRaw, err = json.Marshal(approval.ScenarioIDs)
 	if err != nil {
 		return TaskApproval{}, err
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO task_approvals(task_id,turn_id,input_sha256,scenario_ids) VALUES($1,$2,$3,$4)`, taskID, in.TurnID, fingerprint, idsRaw); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO task_approvals(task_id,turn_id,input_sha256,scenario_ids,base_url,draft_indices) VALUES($1,$2,$3,$4,$5,$6)`, taskID, in.TurnID, fingerprint, idsRaw, checkedTarget.BaseURL, indices); err != nil {
 		return TaskApproval{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -408,13 +425,14 @@ type CoverageVerification struct {
 	Status     string    `json:"status"`
 }
 type CoverageCheck struct {
-	LastVerified *CoverageVerification `json:"last_verified,omitempty"`
-	RunStatus    string                `json:"run_status"`
-	Scenario     Scenario              `json:"scenario"`
-	Result       ScenarioResult        `json:"result"`
-	RunID        string                `json:"run_id"`
-	BaseURL      string                `json:"base_url"`
-	FinishedAt   time.Time             `json:"finished_at"`
+	SavedJourneyIDs []string              `json:"saved_journey_ids,omitempty"`
+	LastVerified    *CoverageVerification `json:"last_verified,omitempty"`
+	RunStatus       string                `json:"run_status"`
+	Scenario        Scenario              `json:"scenario"`
+	Result          ScenarioResult        `json:"result"`
+	RunID           string                `json:"run_id"`
+	BaseURL         string                `json:"base_url"`
+	FinishedAt      time.Time             `json:"finished_at"`
 }
 type Coverage struct {
 	Targets   []string        `json:"targets"`
@@ -444,16 +462,19 @@ func (s *Store) CoverageForTarget(ctx context.Context, projectID, target string)
 		return Coverage{}, err
 	}
 	rows, err := s.db.Query(ctx, `WITH attempts AS (
- SELECT r.id,r.base_url,r.status,r.created_at,COALESCE(r.finished_at,r.created_at) AS finished_at,r.scenarios,result,result->>'scenario_id' AS scenario_id
+ SELECT r.id,r.base_url,r.status,r.created_at,COALESCE(r.finished_at,r.created_at) AS finished_at,r.scenarios,result,result->>'scenario_id' AS scenario_id,receipt.saved_journey_id
  FROM runs r CROSS JOIN LATERAL jsonb_array_elements(r.results) result
+ LEFT JOIN chat_turns receipt ON receipt.run_id=r.id AND receipt.saved_journey_id IS NOT NULL
  WHERE r.project_id=$1 AND ($2='' OR r.base_url=$2) AND r.status NOT IN ('queued','running')
  ), latest AS (
  SELECT DISTINCT ON (scenario_id) * FROM attempts ORDER BY scenario_id,created_at DESC,id DESC
  ), verified AS (
  SELECT DISTINCT ON (scenario_id) scenario_id,jsonb_build_object('run_id',id,'base_url',base_url,'finished_at',finished_at,'status',result->>'status') AS proof
  FROM attempts WHERE result->>'status' IN ('passed','failed') ORDER BY scenario_id,created_at DESC,id DESC
- ) SELECT snapshot,l.result,l.id,l.base_url,l.finished_at,l.status,v.proof
- FROM latest l LEFT JOIN verified v USING(scenario_id)
+ ), named AS (
+ SELECT scenario_id,array_agg(DISTINCT saved_journey_id) AS journeys FROM attempts WHERE saved_journey_id IS NOT NULL GROUP BY scenario_id
+ ) SELECT snapshot,l.result,l.id,l.base_url,l.finished_at,l.status,v.proof,n.journeys
+ FROM latest l LEFT JOIN verified v USING(scenario_id) LEFT JOIN named n USING(scenario_id)
  CROSS JOIN LATERAL jsonb_array_elements(l.scenarios) snapshot
  WHERE snapshot->>'id'=l.scenario_id`, projectID, target)
 	if err != nil {
@@ -464,7 +485,7 @@ func (s *Store) CoverageForTarget(ctx context.Context, projectID, target string)
 	for rows.Next() {
 		var c CoverageCheck
 		var scenario, result, proof []byte
-		if err := rows.Scan(&scenario, &result, &c.RunID, &c.BaseURL, &c.FinishedAt, &c.RunStatus, &proof); err != nil {
+		if err := rows.Scan(&scenario, &result, &c.RunID, &c.BaseURL, &c.FinishedAt, &c.RunStatus, &proof, &c.SavedJourneyIDs); err != nil {
 			return Coverage{}, err
 		}
 		if err := json.Unmarshal(scenario, &c.Scenario); err != nil {

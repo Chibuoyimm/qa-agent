@@ -14,6 +14,8 @@ import (
 
 // Proposal is an unapproved draft, shared by generation and conversation history.
 type Proposal struct {
+	SavedFlowID         string              `json:"saved_flow_id,omitempty"`
+	FlowVersion         string              `json:"flow_version,omitempty"`
 	WholeApp            *WholeAppPlan       `json:"whole_app,omitempty"`
 	CredentialMode      string              `json:"credential_mode"`
 	ChatGPTProfileID    string              `json:"chatgpt_profile_id,omitempty"`
@@ -28,6 +30,7 @@ type Proposal struct {
 }
 
 type ChatTurn struct {
+	JourneySetup   []string         `json:"journey_setup,omitempty"`
 	SavedJourneyID string           `json:"saved_journey_id,omitempty"`
 	TaskID         string           `json:"task_id,omitempty"`
 	ID             string           `json:"id"`
@@ -54,12 +57,12 @@ type ChatPage struct {
 	HasOlder bool       `json:"has_older"`
 }
 
-const chatColumns = `id,sequence,project_id,prompt,status,reply,proposal,COALESCE(run_id,''),created_at,COALESCE(task_id,''),failure,COALESCE(saved_journey_id,'')`
+const chatColumns = `id,sequence,project_id,prompt,status,reply,proposal,COALESCE(run_id,''),created_at,COALESCE(task_id,''),failure,COALESCE(saved_journey_id,''),journey_setup`
 
 func scanChatTurn(row rowScanner) (ChatTurn, error) {
 	var turn ChatTurn
 	var raw, failure []byte
-	err := row.Scan(&turn.ID, &turn.Sequence, &turn.ProjectID, &turn.Prompt, &turn.Status, &turn.Reply, &raw, &turn.RunID, &turn.CreatedAt, &turn.TaskID, &failure, &turn.SavedJourneyID)
+	err := row.Scan(&turn.ID, &turn.Sequence, &turn.ProjectID, &turn.Prompt, &turn.Status, &turn.Reply, &raw, &turn.RunID, &turn.CreatedAt, &turn.TaskID, &failure, &turn.SavedJourneyID, &turn.JourneySetup)
 	if err != nil {
 		return ChatTurn{}, err
 	}

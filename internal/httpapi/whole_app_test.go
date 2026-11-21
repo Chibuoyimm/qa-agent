@@ -124,6 +124,9 @@ func TestWholeApp(t *testing.T) {
 				t.Error("new request did not use saved journey requirements")
 			}
 			output = map[string]any{"scenarios": []qa.ScenarioInput{}, "questions": []string{"Which guest order should be used?"}, "assumptions": []string{}}
+			if strings.Contains(payload.Input, "prepared cancellation reference") {
+				output = map[string]any{"scenarios": []qa.ScenarioInput{{Name: "Cancel the prepared order", ExpectedOutcome: "The order is cancelled", Steps: []qa.Step{{Action: "navigate", Path: "/orders/prepared"}, {Action: "assert_visible", TestID: "cancelled"}}}}, "questions": []string{}, "assumptions": []string{}}
+			}
 		case "qa_repository_files":
 			paths := []string{file}
 			if file == "orders.ts" {
@@ -308,6 +311,17 @@ func TestWholeApp(t *testing.T) {
 	call("POST", root+"/tasks/"+other.ID+"/chat", "", map[string]any{"request_id": save.RequestID, "prompt": "Test this saved journey", "model": "fixture", "credential_mode": "managed", "consent": true}, 200)
 	if checks, err := store.ListScenarios(ctx, project.ID); err != nil || len(checks) != 0 {
 		t.Fatal("drafting persisted runnable checks before approval")
+	}
+	// Add setup in the original whole-app chat, then resolve the revised saved flow there.
+	var prepared qa.ChatTurn
+	update := map[string]any{"request_id": strings.Repeat("ab", 16), "prompt": "Use the prepared cancellation reference", "saved_flow_id": saved.Turn.SavedJourneyID, "model": "fixture", "credential_mode": "managed", "consent": true}
+	if err := json.Unmarshal(call("POST", taskPath+"/chat", "", update, 200), &prepared); err != nil || prepared.Proposal == nil || prepared.Proposal.SavedFlowID != saved.Turn.SavedJourneyID {
+		t.Fatal("setup was not attached to the named flow", err)
+	}
+	var review qa.SaveJourneyResult
+	command := qa.RunJourneyInput{RequestID: strings.Repeat("bc", 16), Prompt: "run the cancel a guest order journey", Reference: "Cancel a guest order", Mode: "advisory"}
+	if err := json.Unmarshal(call("POST", taskPath+"/run-journey", "", command, 200), &review); err != nil || review.Turn == nil || review.Turn.Proposal == nil || len(review.Turn.Proposal.Scenarios) != 1 || review.Turn.Proposal.FlowVersion != prepared.ID || review.Turn.RunID != "" {
+		t.Fatal("expected review of the prepared flow in the same chat", err)
 	}
 	input["context"] = "unrecognised evidence fixture"
 	input["request_id"] = strings.Repeat("2", 32)

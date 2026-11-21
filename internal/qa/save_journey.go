@@ -27,6 +27,9 @@ type JourneyPlan struct {
 func (s *Store) SavedJourneyPlan(ctx context.Context, project, journey string) (*JourneyPlan, error) {
 	var plan *JourneyPlan
 	err := s.db.QueryRow(ctx, `SELECT saved_plan FROM journeys WHERE project_id=$1 AND id=$2`, project, journey).Scan(&plan)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
 	return plan, err
 }
 
@@ -52,7 +55,8 @@ type SaveJourneyResult struct {
 
 type journeyCandidate struct {
 	journeyChoice
-	plan JourneyPlan
+	plan    JourneyPlan
+	aliases []string
 }
 
 func planCandidates(t ChatTurn) []journeyCandidate {
@@ -64,12 +68,25 @@ func planCandidates(t ChatTurn) []journeyCandidate {
 		if p.WholeApp != nil && i < len(p.WholeApp.Coverage) {
 			plan.SourceRefs = p.WholeApp.Coverage[i]
 		}
-		items = append(items, journeyCandidate{journeyChoice{key, s.Name}, plan})
+		items = append(items, journeyCandidate{journeyChoice: journeyChoice{key, s.Name}, plan: plan})
 	}
 	if p.WholeApp != nil {
 		for i, s := range p.WholeApp.NeedsSetup {
 			key := fmt.Sprintf("setup:%d", i)
-			items = append(items, journeyCandidate{journeyChoice{key, s.Name}, JourneyPlan{TaskID: t.TaskID, TurnID: t.ID, Item: key, ExpectedOutcome: s.ExpectedOutcome, MissingSetup: s.MissingSetup, SourceRefs: s.SourceRefs}})
+			items = append(items, journeyCandidate{journeyChoice: journeyChoice{key, s.Name}, plan: JourneyPlan{TaskID: t.TaskID, TurnID: t.ID, Item: key, ExpectedOutcome: s.ExpectedOutcome, MissingSetup: s.MissingSetup, SourceRefs: s.SourceRefs}})
+		}
+	}
+	aliases := map[string]string{}
+	if p.WholeApp != nil {
+		for i, s := range p.WholeApp.Sources {
+			for j, v := range s.Journeys {
+				aliases[JourneyRef(i, j)] = v.Name
+			}
+		}
+	}
+	for i := range items {
+		for _, ref := range items[i].plan.SourceRefs {
+			items[i].aliases = append(items[i].aliases, aliases[ref])
 		}
 	}
 	return items
@@ -126,25 +143,17 @@ func titleMatch(title string, query []string) int {
 	return score
 }
 
-func matchJourneys(p *Proposal, items []journeyCandidate, ref string) []journeyCandidate {
+func matchJourneys(items []journeyCandidate, ref string) []journeyCandidate {
 	if len(items) == 1 && strings.TrimSpace(ref) == "" {
 		return items
 	}
 	query := journeyWords(ref)
-	aliases := map[string]string{}
-	if p.WholeApp != nil {
-		for i, s := range p.WholeApp.Sources {
-			for j, v := range s.Journeys {
-				aliases[JourneyRef(i, j)] = v.Name
-			}
-		}
-	}
 	var matches []journeyCandidate
 	best := 0
 	for _, item := range items {
 		score := titleMatch(item.Name, query)
-		for _, id := range item.plan.SourceRefs {
-			score = max(score, titleMatch(aliases[id], query))
+		for _, alias := range item.aliases {
+			score = max(score, titleMatch(alias, query))
 		}
 		// Generic nouns should offer all matching flows.
 		if len(query) == 1 && score > 0 {
@@ -229,7 +238,7 @@ func (s *Store) SavePlanJourney(ctx context.Context, project, task string, in Sa
 			return result, ErrInvalid
 		}
 	} else {
-		matches = matchJourneys(src.Proposal, items, in.Reference)
+		matches = matchJourneys(items, in.Reference)
 		if len(matches) != 1 {
 			if len(matches) == 0 {
 				matches = items

@@ -71,9 +71,35 @@ try {
   assert.equal(await review.getByRole('link',{name:'checkout.tsx',exact:true}).first().getAttribute('href'), `https://github.com/shop/frontend/blob/${'a'.repeat(40)}/checkout.tsx`);
   await review.getByText(/Additional source findings/).click();
   assert.ok((await review.innerText()).includes('Guest cancellation'));
+  const conversationURL = page.url();
+  async function requestJourney(text, button) {
+    await message.fill(text);
+    await page.getByRole('button',{name:button,exact:true}).click();
+    return page.locator('.chat-exchange').filter({has:page.getByText(text,{exact:true})}).last();
+  }
+  const blocked = await requestJourney('run the guest cancellation journey','Run saved journey');
+  // The source calls it "Cancel a guest order"; an unmatched description asks for a choice.
+  const picker = page.getByRole('combobox',{name:/Which journey did you mean/});
+  await picker.selectOption({label:'Cancel a guest order'});
+  await page.getByRole('button',{name:'Run selected journey',exact:true}).click();
+  await blocked.getByRole('region',{name:'Required setup'}).getByText('Provide a pending guest order and its cancellation reference.').waitFor();
+  await requestJourney('save the track delivery journey','Save journey');
+  await page.getByText('Saved “Track delivery” as a separate journey in Coverage.',{exact:true}).waitFor();
+  const named = await requestJourney('run the track delivery journey','Run saved journey');
+  await named.getByRole('button',{name:'Approve & run 1 check',exact:true}).click();
+  await page.getByText('1 passed · 0 failed · 0 unverified · 0 unfinished',{exact:true}).waitFor({timeout:60000});
+  const replay = await requestJourney('rerun the track delivery journey','Run saved journey');
+  await replay.getByText('1 passed · 0 failed · 0 unverified · 0 unfinished',{exact:true}).waitFor({timeout:60000});
+  await replay.getByRole('button',{name:'Open results and evidence'}).click();
+  const replayID = new URLSearchParams(page.url().split('?')[1]).get('run');
+  const replayRun = await (await fetch(`${base}/api/runs/${replayID}`,{headers:{authorization:'Bearer operator'}})).json();
+  assert.deepEqual(replayRun.scenarios.map(s=>s.name), ['Track delivery']);
+  assert.equal(replayRun.results[0].step_results.length,3);
+  await page.goBack();
+  assert.equal(page.url(),conversationURL);
   await page.getByRole('button',{name:'Approve & run 2 checks',exact:true}).click();
   await page.getByText('2 passed · 0 failed · 0 unverified · 0 unfinished',{exact:true}).waitFor({timeout:60000});
-  await page.getByRole('button',{name:'Open results and evidence',exact:true}).click();
+  await page.locator('.run-summary').filter({hasText:'2 passed'}).getByRole('button',{name:'Open results and evidence',exact:true}).click();
   await page.getByRole('button',{name:'Discuss these results in Test'}).waitFor();
   const runID = new URLSearchParams(page.url().split('?')[1]).get('run');
   const run = await (await fetch(`${base}/api/runs/${runID}`,{headers:{authorization:'Bearer operator'}})).json();

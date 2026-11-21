@@ -77,7 +77,7 @@ export default function ReviewPlan({ token, project, task, turn, scenarios, onAp
     if (!approval && (needsRevision || (edited && !reviewed))) { setError('Review the updated assertions before approval. A changed requirement needs an updated plan.'); return }
     setSaving(true); setError('')
     try {
-      const approved = approval ?? await api<TaskApproval>(token, `/api/projects/${project.id}/tasks/${task.id}/approve`, { method: 'POST', body: JSON.stringify({ turn_id: turn.id, drafts: selected.map(index => ({ index, ...drafts[index], approved: true })) }) })
+      const approved = approval ?? await api<TaskApproval>(token, `/api/projects/${project.id}/tasks/${task.id}/approve`, { method: 'POST', body: JSON.stringify({ turn_id: turn.id, base_url: settings.target, drafts: selected.map(index => ({ index, ...drafts[index], approved: true })) }) })
       setApprovedHere(approved)
       await onApproved()
       await onRun(approved.scenario_ids, retryID.current, settings)
